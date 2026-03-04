@@ -4,14 +4,9 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# PostgreSQL Connection String (Async format)
-DB_USER = os.getenv("POSTGRES_USER", "bloodline_user")
-DB_PASS = os.getenv("POSTGRES_PASSWORD", "bloodline_pass")
-DB_HOST = os.getenv("POSTGRES_HOST", "localhost")
-DB_PORT = os.getenv("POSTGRES_PORT", "5432")
-DB_NAME = os.getenv("POSTGRES_DB", "bloodline")
-
-DATABASE_URL = f"postgresql+asyncpg://{DB_USER}:{DB_PASS}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+# SQLite（ファイルベース）— Docker不要
+DB_PATH = os.getenv("SQLITE_DB_PATH", os.path.join(os.path.dirname(__file__), "..", "..", "bloodline.db"))
+DATABASE_URL = f"sqlite+aiosqlite:///{DB_PATH}"
 
 engine = create_async_engine(DATABASE_URL, echo=False)
 AsyncSessionLocal = async_sessionmaker(
