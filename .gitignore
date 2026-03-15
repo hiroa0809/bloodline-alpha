@@ -26,6 +26,12 @@ pgdata/
 .idea/
 *.swp
 
+# データベース（インポーターで再生成可能）
+backend/bloodline.db
+
+# JV-Data仕様書（JRA-VAN配布、再ダウンロード可能）
+docs/vdata_spec/
+
 # OS
 Thumbs.db
 .DS_Store
