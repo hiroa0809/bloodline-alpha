@@ -29,6 +29,9 @@ pgdata/
 # データベース（インポーターで再生成可能）
 backend/bloodline.db
 
+# ログファイル
+backend/logs/
+
 # JV-Data仕様書（JRA-VAN配布、再ダウンロード可能）
 docs/vdata_spec/
 
