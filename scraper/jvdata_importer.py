@@ -240,6 +240,10 @@ class JVDataImporter:
         skipped_years = []
         grand_total = {"RA": 0, "SE": 0, "UM": 0, "SK": 0}
 
+        if not years:
+            self.logger.warning("対象年が空です")
+            return {"success": [], "failed": [], "skipped": [], "totals": grand_total}
+
         self.logger.info(f"全年インポート開始: {len(years)}年分 ({years[0]}〜{years[-1]})")
         if resume:
             self.logger.info("--resume モード有効: インポート済み年はスキップします")

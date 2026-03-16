@@ -120,24 +120,12 @@ def build_sire_mapping(conn: sqlite3.Connection) -> int:
     return count
 
 
-def aggregate_stats(conn: sqlite3.Connection, role: str) -> int:
-    """種牡馬 or BMS の成績を集計して sire_stats に INSERT"""
-    logger.info(f"集計中: role={role}")
-
-    if role == "sire":
-        bango_col = "sire_bango"
-        bamei_col = "sire_bamei"
-    else:
-        bango_col = "bms_bango"
-        bamei_col = "bms_bamei"
-
-    now = datetime.now(timezone.utc).isoformat()
-
-    # 集計クエリ
+def _build_aggregate_sql(bango_col: str, bamei_col: str, role: str, now: str) -> str:
+    """集計クエリを構築する（role ごとに固定カラムを使用）"""
     # tansho_odds は '0042' = 4.2倍 の形式。int(odds)/10 が実オッズ。
     # 単勝回収率 = Σ(1着時のオッズ×100) / (出走回数×100) = Σ(1着時のオッズ) / 出走回数
-    # ただし kakutei_chakujun が '00' や空 は除外、ijo_kubun_code が '0'（正常）のみ
-    sql = f"""
+    # kakutei_chakujun が '00' や空 は除外、ijo_kubun_code が '0'（正常）のみ
+    return f"""
         INSERT OR REPLACE INTO sire_stats
             (hanshoku_bango, role, bamei, runners, starts, wins, second, third,
              win_rate, rentai_rate, fukusho_rate, tansho_roi, updated_at)
@@ -150,24 +138,20 @@ def aggregate_stats(conn: sqlite3.Connection, role: str) -> int:
             SUM(CASE WHEN ru.kakutei_chakujun = '01' THEN 1 ELSE 0 END) AS wins,
             SUM(CASE WHEN ru.kakutei_chakujun = '02' THEN 1 ELSE 0 END) AS second,
             SUM(CASE WHEN ru.kakutei_chakujun = '03' THEN 1 ELSE 0 END) AS third,
-            -- 勝率
             CAST(SUM(CASE WHEN ru.kakutei_chakujun = '01' THEN 1 ELSE 0 END) AS REAL)
                 / COUNT(*),
-            -- 連対率
             CAST(SUM(CASE WHEN ru.kakutei_chakujun IN ('01','02') THEN 1 ELSE 0 END) AS REAL)
                 / COUNT(*),
-            -- 複勝率
             CAST(SUM(CASE WHEN ru.kakutei_chakujun IN ('01','02','03') THEN 1 ELSE 0 END) AS REAL)
                 / COUNT(*),
-            -- 単勝回収率: 1着時に tansho_odds / 10 を加算、全体を starts で割る
             CAST(
                 SUM(CASE
                     WHEN ru.kakutei_chakujun = '01' AND ru.tansho_odds IS NOT NULL
                         AND ru.tansho_odds != '' AND CAST(ru.tansho_odds AS INTEGER) > 0
-                    THEN CAST(ru.tansho_odds AS INTEGER) * 10.0  -- 100円単位の払戻金
+                    THEN CAST(ru.tansho_odds AS INTEGER) * 10.0
                     ELSE 0
                 END)
-                / (COUNT(*) * 100.0)  -- 100円×出走回数
+                / (COUNT(*) * 100.0)
             AS REAL),
             '{now}'
         FROM _tmp_uma_sire m
@@ -180,6 +164,23 @@ def aggregate_stats(conn: sqlite3.Connection, role: str) -> int:
           AND (ru.ijo_kubun_code IS NULL OR ru.ijo_kubun_code = '0')
         GROUP BY m.{bango_col}
     """
+
+
+# role ごとに固定SQLを事前定義（S608 対策: 外部入力がSQL構築に混入しない）
+_AGGREGATE_SQLS = {
+    "sire": lambda now: _build_aggregate_sql("sire_bango", "sire_bamei", "sire", now),
+    "bms": lambda now: _build_aggregate_sql("bms_bango", "bms_bamei", "bms", now),
+}
+
+
+def aggregate_stats(conn: sqlite3.Connection, role: str) -> int:
+    """種牡馬 or BMS の成績を集計して sire_stats に INSERT"""
+    if role not in _AGGREGATE_SQLS:
+        raise ValueError(f"不正な role: {role}")
+
+    logger.info(f"集計中: role={role}")
+    now = datetime.now(timezone.utc).isoformat()
+    sql = _AGGREGATE_SQLS[role](now)
 
     cursor = conn.execute(sql)
     conn.commit()
