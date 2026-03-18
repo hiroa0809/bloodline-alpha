@@ -184,8 +184,15 @@ def build_sire_mapping(conn: sqlite3.Connection) -> int:
             bms_bango = ketto_list[4].get("hanshoku_toroku_bango")
             bms_bamei = ketto_list[4].get("bamei")
 
-        if sire_bango and sire_bango.strip():
-            batch.append((ketto_bango, sire_bango.strip(), sire_bamei, bms_bango, bms_bamei))
+        sire_bango_norm = (
+            sire_bango.strip() if isinstance(sire_bango, str) and sire_bango.strip() else None
+        )
+        bms_bango_norm = (
+            bms_bango.strip() if isinstance(bms_bango, str) and bms_bango.strip() else None
+        )
+
+        if sire_bango_norm:
+            batch.append((ketto_bango, sire_bango_norm, sire_bamei, bms_bango_norm, bms_bamei))
             count += 1
 
         if len(batch) >= 10000:
@@ -277,10 +284,15 @@ def aggregate_condition_stats(conn: sqlite3.Connection, role: str, condition_typ
 def swap_table(conn: sqlite3.Connection) -> None:
     """作業テーブルを本番テーブルにアトミックスワップ"""
     logger.info("テーブルをアトミックスワップ中...")
-    conn.execute("BEGIN")
-    conn.execute("DROP TABLE IF EXISTS sire_condition_stats")
-    conn.execute(f"ALTER TABLE {WORK_TABLE} RENAME TO sire_condition_stats")
-    conn.commit()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute("DROP TABLE IF EXISTS sire_condition_stats")
+        conn.execute(f"ALTER TABLE {WORK_TABLE} RENAME TO sire_condition_stats")
+    except Exception:
+        conn.rollback()
+        raise
+    else:
+        conn.commit()
     logger.info("スワップ完了")
 
 
