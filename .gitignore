@@ -28,6 +28,8 @@ pgdata/
 
 # データベース（インポーターで再生成可能）
 backend/bloodline.db
+backend/bloodline.db-shm
+backend/bloodline.db-wal
 
 # ログファイル
 backend/logs/
