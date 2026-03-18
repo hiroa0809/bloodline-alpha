@@ -82,19 +82,40 @@ def parse_odds(odds_str: str | None) -> float:
         return 0.0
 
 
+def safe_int(value: str | None, default: int = 0) -> int:
+    """文字列を安全に int に変換。失敗時は default を返す。"""
+    try:
+        return int(value)
+    except (ValueError, TypeError):
+        return default
+
+
 # --- エンドポイント ---
 
-@router.get("/mock/{race_id}")
+@router.get("/mock/{race_id}", response_model=RaceScoreResponse)
 async def get_mock_score(race_id: str):
     """[デモ用] 固定のダミースコアを返す"""
-    return {
-        "race_id": race_id,
-        "predictions": [
-            {"horse_number": 1, "horse_name": "リアルスティール産駒", "score": 85, "score_details": {"bloodline": 55, "condition": 18, "human": 12}, "odds": 5.5, "popularity": 3, "expected_value": 1.45},
-            {"horse_number": 2, "horse_name": "過剰人気馬", "score": 45, "score_details": {"bloodline": 20, "condition": 15, "human": 10}, "odds": 1.8, "popularity": 1, "expected_value": 0.55},
-            {"horse_number": 3, "horse_name": "穴馬", "score": 75, "score_details": {"bloodline": 50, "condition": 15, "human": 10}, "odds": 25.0, "popularity": 8, "expected_value": 1.30},
+    return RaceScoreResponse(
+        race_id=race_id,
+        race_name="デモ用レース",
+        predictions=[
+            PredictionItem(
+                horse_number=1, horse_name="リアルスティール産駒", ketto_toroku_bango="0000000000",
+                odds=5.5, popularity=3, total_score=85,
+                category_scores={"A": CategoryDetail(total=55, details={"A1": 35, "A2": 20}), "B": CategoryDetail(total=18, details={}), "C": CategoryDetail(total=12, details={}), "D": CategoryDetail(total=0, details={}), "E": CategoryDetail(total=0, details={})},
+            ),
+            PredictionItem(
+                horse_number=2, horse_name="過剰人気馬", ketto_toroku_bango="0000000001",
+                odds=1.8, popularity=1, total_score=45,
+                category_scores={"A": CategoryDetail(total=20, details={"A1": 12, "A2": 8}), "B": CategoryDetail(total=15, details={}), "C": CategoryDetail(total=10, details={}), "D": CategoryDetail(total=0, details={}), "E": CategoryDetail(total=0, details={})},
+            ),
+            PredictionItem(
+                horse_number=3, horse_name="穴馬", ketto_toroku_bango="0000000002",
+                odds=25.0, popularity=8, total_score=75,
+                category_scores={"A": CategoryDetail(total=50, details={"A1": 30, "A2": 20}), "B": CategoryDetail(total=15, details={}), "C": CategoryDetail(total=10, details={}), "D": CategoryDetail(total=0, details={}), "E": CategoryDetail(total=0, details={})},
+            ),
         ],
-    }
+    )
 
 
 @router.get("/{race_id}", response_model=RaceScoreResponse)
@@ -152,11 +173,11 @@ async def get_score(race_id: str, db: AsyncSession = Depends(get_db)):
 
         predictions.append(
             PredictionItem(
-                horse_number=int(umaban or 0),
+                horse_number=safe_int(umaban),
                 horse_name=(bamei or "").strip(),
                 ketto_toroku_bango=ketto_bango or "",
                 odds=parse_odds(odds_str),
-                popularity=int(ninki_str or 0),
+                popularity=safe_int(ninki_str),
                 total_score=bloodline["total"],
                 category_scores={
                     "A": CategoryDetail(

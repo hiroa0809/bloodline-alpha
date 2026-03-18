@@ -6,6 +6,7 @@ A1: 父成績、A2: BMS成績、A3〜A5: 未実装（0を返す）
 """
 
 import ast
+import asyncio
 import bisect
 import logging
 
@@ -25,6 +26,7 @@ DEFAULT_WEIGHTS = {
 
 # パーセンタイル算出用キャッシュ（サーバー起動中は保持、アトミックに差し替え）
 _percentile_cache: dict = {}
+_cache_lock = asyncio.Lock()
 
 
 def _percentile_rank(sorted_values: list[float], value: float) -> float:
@@ -73,8 +75,11 @@ async def _build_percentile_cache(db: AsyncSession) -> dict:
 async def ensure_percentile_cache(db: AsyncSession) -> None:
     """キャッシュが空なら構築する。呼び出し元でループ前に1回呼ぶ。"""
     global _percentile_cache
-    if not _percentile_cache:
-        _percentile_cache = await _build_percentile_cache(db)
+    if _percentile_cache:
+        return
+    async with _cache_lock:
+        if not _percentile_cache:
+            _percentile_cache = await _build_percentile_cache(db)
 
 
 async def refresh_percentile_cache(db: AsyncSession) -> None:
@@ -135,7 +140,7 @@ def calc_bloodline_score(sandai_ketto_str: str | None) -> dict:
                 sire_bango = ketto_list[0].get("hanshoku_toroku_bango", "").strip() or None
             if len(ketto_list) > 4 and isinstance(ketto_list[4], dict):
                 bms_bango = ketto_list[4].get("hanshoku_toroku_bango", "").strip() or None
-        except (ValueError, SyntaxError):
+        except (ValueError, SyntaxError, RecursionError, MemoryError):
             pass
 
     # A1: 父成績
