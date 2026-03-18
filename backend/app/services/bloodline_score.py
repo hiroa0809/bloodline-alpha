@@ -8,6 +8,7 @@ A1: 父成績、A2: BMS成績、A3〜A5: 未実装（0を返す）
 import ast
 import asyncio
 import bisect
+import json
 import logging
 
 from sqlalchemy import text
@@ -128,7 +129,10 @@ def parse_sandai_ketto(sandai_ketto_str: str | None) -> tuple[str | None, str | 
 
     if sandai_ketto_str:
         try:
-            ketto_list = ast.literal_eval(sandai_ketto_str)
+            try:
+                ketto_list = json.loads(sandai_ketto_str)
+            except (json.JSONDecodeError, TypeError):
+                ketto_list = ast.literal_eval(sandai_ketto_str)
             if not isinstance(ketto_list, list):
                 return None, None
             if len(ketto_list) > 0 and isinstance(ketto_list[0], dict):

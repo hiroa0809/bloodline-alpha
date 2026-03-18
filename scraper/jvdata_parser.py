@@ -334,6 +334,146 @@ SK_FIELDS = [
     ("sandai_hanshoku_13", 10), ("sandai_hanshoku_14", 10),
 ]
 
+# --- KS: 騎手マスタ (仕様書セクション14, Row 618-707) ---
+# 基本フィールドのみ定義（264B）。複雑な繰返セクション（初騎乗/初勝利/重賞/成績 = 3907B）はスキップ。
+KS_FIELDS = [
+    ("record_shubetsu_id", 2),
+    ("data_kubun", 1),
+    ("data_sakusei_ymd", 8),
+    ("kishu_code", 5),
+    ("kishu_massho_kubun", 1),
+    ("kishu_menkyo_kofu_ymd", 8),
+    ("kishu_menkyo_massho_ymd", 8),
+    ("seinengappi", 8),
+    ("kishu_mei", 34),
+    ("kishu_mei_kana", 34),
+    ("_yobi_ks_eiji_short", 30),    # 英字短縮名（スキーマに列なし）
+    ("kishu_mei_ryakusho", 8),
+    ("kishu_mei_eiji", 80),
+    ("seibetsu_kubun", 1),
+    ("kijo_shikaku_code", 1),
+    ("kishu_minarai_code", 1),
+    ("kishu_tozai_shozoku_code", 1),
+    ("shotai_chiiki_mei", 20),
+    ("shozoku_chokyoshi_code", 5),
+    ("shozoku_chokyoshi_mei_ryakusho", 8),
+    # 残り 3907B: 初騎乗(134) + 初勝利(128) + 最近重賞(489) + 成績(3156)
+    # → パーサーは定義外バイトを無視するため、DB側はNULLになる
+]
+
+# --- CH: 調教師マスタ (仕様書セクション15, Row 708-778) ---
+# 基本フィールドのみ定義（215B）。繰返セクション（重賞/成績 = 3645B）はスキップ。
+CH_FIELDS = [
+    ("record_shubetsu_id", 2),
+    ("data_kubun", 1),
+    ("data_sakusei_ymd", 8),
+    ("chokyoshi_code", 5),
+    ("chokyoshi_massho_kubun", 1),
+    ("chokyoshi_menkyo_kofu_ymd", 8),
+    ("chokyoshi_menkyo_massho_ymd", 8),
+    ("seinengappi", 8),
+    ("chokyoshi_mei", 34),
+    ("chokyoshi_mei_kana", 30),
+    ("chokyoshi_mei_ryakusho", 8),
+    ("chokyoshi_mei_eiji", 80),
+    ("seibetsu_kubun", 1),
+    ("chokyoshi_tozai_shozoku_code", 1),
+    ("shotai_chiiki_mei", 20),
+    # 残り 3645B: 最近重賞(489) + 成績(3156)
+]
+
+# --- BR: 生産者マスタ (仕様書セクション16, Row 779-799) ---
+BR_FIELDS = [
+    ("record_shubetsu_id", 2),
+    ("data_kubun", 1),
+    ("data_sakusei_ymd", 8),
+    ("seisansha_code", 8),
+    ("seisansha_mei_hojinkaku_ari", 72),
+    ("seisansha_mei", 72),
+    ("seisansha_mei_kana", 72),
+    ("seisansha_mei_eiji", 168),
+    ("seisansha_jusho", 20),
+    # 成績 2回分 (各60B: nendo4 + hon_shokin10 + fuka_shokin10 + chakukaisu6×6=36)
+    ("seiseki_1_nendo", 4),
+    ("seiseki_1_hon_shokin", 10),
+    ("seiseki_1_fuka_shokin", 10),
+    ("seiseki_1_chaku_1", 6), ("seiseki_1_chaku_2", 6), ("seiseki_1_chaku_3", 6),
+    ("seiseki_1_chaku_4", 6), ("seiseki_1_chaku_5", 6), ("seiseki_1_chaku_gai", 6),
+    ("seiseki_2_nendo", 4),
+    ("seiseki_2_hon_shokin", 10),
+    ("seiseki_2_fuka_shokin", 10),
+    ("seiseki_2_chaku_1", 6), ("seiseki_2_chaku_2", 6), ("seiseki_2_chaku_3", 6),
+    ("seiseki_2_chaku_4", 6), ("seiseki_2_chaku_5", 6), ("seiseki_2_chaku_gai", 6),
+]
+
+# --- BN: 馬主マスタ (仕様書セクション17, Row 800-820) ---
+BN_FIELDS = [
+    ("record_shubetsu_id", 2),
+    ("data_kubun", 1),
+    ("data_sakusei_ymd", 8),
+    ("banushi_code", 6),
+    ("banushi_mei_hojinkaku_ari", 64),
+    ("banushi_mei", 64),
+    ("banushi_mei_kana", 50),
+    ("banushi_mei_eiji", 100),
+    ("fukushoku_hyoji", 60),
+    # 成績 2回分 (BR と同構造、各60B)
+    ("seiseki_1_nendo", 4),
+    ("seiseki_1_hon_shokin", 10),
+    ("seiseki_1_fuka_shokin", 10),
+    ("seiseki_1_chaku_1", 6), ("seiseki_1_chaku_2", 6), ("seiseki_1_chaku_3", 6),
+    ("seiseki_1_chaku_4", 6), ("seiseki_1_chaku_5", 6), ("seiseki_1_chaku_gai", 6),
+    ("seiseki_2_nendo", 4),
+    ("seiseki_2_hon_shokin", 10),
+    ("seiseki_2_fuka_shokin", 10),
+    ("seiseki_2_chaku_1", 6), ("seiseki_2_chaku_2", 6), ("seiseki_2_chaku_3", 6),
+    ("seiseki_2_chaku_4", 6), ("seiseki_2_chaku_5", 6), ("seiseki_2_chaku_gai", 6),
+]
+
+# --- HR: 払戻 (仕様書セクション4, Row 216-297) ---
+# ヘッダ(31B) + フラグ(27B) + 票数情報(44B) + 払戻セクション(615B) = 717B
+_HR_HEADER = [
+    ("record_shubetsu_id", 2),
+    ("data_kubun", 1),
+    ("data_sakusei_ymd", 8),
+    ("kaisai_nen", 4),
+    ("kaisai_tsukihi", 4),
+    ("keibajo_code", 2),
+    ("kaisai_kai", 2),
+    ("kaisai_nichime", 2),
+    ("race_bango", 2),
+    ("toroku_tosu", 2),
+    ("shusso_tosu", 2),
+    # 不成立フラグ 9B
+    ("fuka_flag_tansho", 1), ("fuka_flag_fukusho", 1), ("fuka_flag_wakuren", 1),
+    ("fuka_flag_umaren", 1), ("fuka_flag_wide", 1), ("_yobi_hr_1", 1),
+    ("fuka_flag_umatan", 1), ("fuka_flag_sanrenpuku", 1), ("fuka_flag_sanrentan", 1),
+    # 返還フラグ 9B
+    ("_yobi_hr_henkan", 9),
+    # 返還馬フラグ 9B + 票数情報 44B
+    ("_yobi_hr_extra", 53),
+]
+
+# 払戻セクション: 券種ごとにサブフィールドを展開
+_HR_PAYOFF_DEFS = [
+    # (券種名, 繰返回数, [(サブフィールド名, バイト数), ...])
+    ("tansho",     3, [("umaban", 2), ("haraimodoshi", 9), ("ninki", 2)]),
+    ("fukusho",    5, [("umaban", 2), ("haraimodoshi", 9), ("ninki", 2)]),
+    ("wakuren",    3, [("kumiban", 2), ("haraimodoshi", 9), ("ninki", 2)]),
+    ("umaren",     3, [("kumiban", 4), ("haraimodoshi", 9), ("ninki", 3)]),
+    ("wide",       7, [("kumiban", 4), ("haraimodoshi", 9), ("ninki", 3)]),
+    ("_yobi_pay",  3, [("_yobi_a", 4), ("_yobi_b", 9), ("_yobi_c", 3)]),
+    ("umatan",     6, [("kumiban", 4), ("haraimodoshi", 9), ("ninki", 3)]),
+    ("sanrenpuku", 3, [("kumiban", 6), ("haraimodoshi", 9), ("ninki", 3)]),
+    ("sanrentan",  6, [("kumiban", 6), ("haraimodoshi", 9), ("ninki", 4)]),
+]
+
+HR_FIELDS = list(_HR_HEADER)
+for _pname, _pcount, _psubs in _HR_PAYOFF_DEFS:
+    for _i in range(1, _pcount + 1):
+        for _sname, _slen in _psubs:
+            HR_FIELDS.append((f"{_pname}_{_sname}_{_i}", _slen))
+
 # レコード種別ID → フィールド定義のマッピング
 RECORD_FIELDS = {
     "RA": RA_FIELDS,
@@ -341,6 +481,11 @@ RECORD_FIELDS = {
     "UM": UM_FIELDS,
     "HN": HN_FIELDS,
     "SK": SK_FIELDS,
+    "KS": KS_FIELDS,
+    "CH": CH_FIELDS,
+    "BR": BR_FIELDS,
+    "BN": BN_FIELDS,
+    "HR": HR_FIELDS,
 }
 
 # テキストフィールド（Shift-JIS → UTF-8 変換対象）
@@ -350,6 +495,7 @@ TEXT_FIELD_SUFFIXES = (
     "_meisho", "bamei", "_kana", "_eiji", "_mei",
     "_hyoji", "_juni",  # コーナー通過順位テキスト
     "shotai_chiiki_mei", "sanchi_mei",
+    "_jusho",  # 生産者住所
 )
 
 

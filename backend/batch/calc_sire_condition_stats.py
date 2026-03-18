@@ -11,6 +11,7 @@ jvd_race_uma × jvd_race をJOINし、レース条件（馬場・距離帯・競
 """
 
 import ast
+import json
 import logging
 import sqlite3
 import sys
@@ -164,7 +165,10 @@ def build_sire_mapping(conn: sqlite3.Connection) -> int:
     for row in cursor:
         ketto_bango, sandai_raw = row
         try:
-            ketto_list = ast.literal_eval(sandai_raw)
+            try:
+                ketto_list = json.loads(sandai_raw)
+            except (json.JSONDecodeError, TypeError):
+                ketto_list = ast.literal_eval(sandai_raw)
             if not isinstance(ketto_list, list):
                 errors += 1
                 continue
