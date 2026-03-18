@@ -131,6 +131,9 @@ def calc_bloodline_score(sandai_ketto_str: str | None) -> dict:
         "sire_info": {...}, "bms_info": {...}
     }
     """
+    if not _percentile_cache:
+        logger.warning("パーセンタイルキャッシュが未初期化です。ensure_percentile_cache()を呼んでください。")
+
     sire_bango = None
     bms_bango = None
 
