@@ -33,7 +33,7 @@ def _percentile_rank(sorted_values: list[float], value: float) -> float:
     """ソート済みリスト中での百分位（0.0〜1.0）を返す"""
     if not sorted_values:
         return 0.0
-    idx = bisect.bisect_left(sorted_values, value)
+    idx = bisect.bisect_right(sorted_values, value)
     return idx / len(sorted_values)
 
 
@@ -144,7 +144,7 @@ def calc_bloodline_score(sandai_ketto_str: str | None) -> dict:
                 sire_bango = ketto_list[0].get("hanshoku_toroku_bango", "").strip() or None
             if len(ketto_list) > 4 and isinstance(ketto_list[4], dict):
                 bms_bango = ketto_list[4].get("hanshoku_toroku_bango", "").strip() or None
-        except (ValueError, SyntaxError, RecursionError, MemoryError):
+        except (ValueError, SyntaxError, RecursionError, MemoryError, TypeError, AttributeError):
             pass
 
     # A1: 父成績
