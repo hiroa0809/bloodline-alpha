@@ -196,6 +196,124 @@ class JVDataImporter:
         self.conn.commit()
         return count
 
+    def import_ks(self, records: list[dict]):
+        """KS（騎手マスタ）をインポート"""
+        columns = self._get_table_columns("jvd_kishu")
+        count = 0
+        for rec in records:
+            if rec.get("_record_type") != "KS":
+                continue
+            data = self._filter_columns(rec, columns)
+            self._upsert("jvd_kishu", data)
+            count += 1
+        self.conn.commit()
+        return count
+
+    def import_ch(self, records: list[dict]):
+        """CH（調教師マスタ）をインポート"""
+        columns = self._get_table_columns("jvd_chokyoshi")
+        count = 0
+        for rec in records:
+            if rec.get("_record_type") != "CH":
+                continue
+            data = self._filter_columns(rec, columns)
+            self._upsert("jvd_chokyoshi", data)
+            count += 1
+        self.conn.commit()
+        return count
+
+    def import_br(self, records: list[dict]):
+        """BR（生産者マスタ）をインポート"""
+        columns = self._get_table_columns("jvd_seisansha")
+        count = 0
+        for rec in records:
+            if rec.get("_record_type") != "BR":
+                continue
+            data = self._filter_columns(rec, columns)
+            # 成績をJSON化（2回分）
+            seiseki = []
+            for i in range(1, 3):
+                entry = {
+                    "nendo": rec.get(f"seiseki_{i}_nendo", ""),
+                    "hon_shokin": rec.get(f"seiseki_{i}_hon_shokin", ""),
+                    "fuka_shokin": rec.get(f"seiseki_{i}_fuka_shokin", ""),
+                    "chakukaisu": [
+                        rec.get(f"seiseki_{i}_chaku_{j}", "0") for j in range(1, 7)
+                    ],
+                }
+                # chaku_gai は6番目
+                entry["chakukaisu"][5] = rec.get(f"seiseki_{i}_chaku_gai", "0")
+                seiseki.append(entry)
+            data["seiseki"] = str(seiseki)
+            self._upsert("jvd_seisansha", data)
+            count += 1
+        self.conn.commit()
+        return count
+
+    def import_bn(self, records: list[dict]):
+        """BN（馬主マスタ）をインポート"""
+        columns = self._get_table_columns("jvd_banushi")
+        count = 0
+        for rec in records:
+            if rec.get("_record_type") != "BN":
+                continue
+            data = self._filter_columns(rec, columns)
+            # 成績をJSON化（BR と同構造、2回分）
+            seiseki = []
+            for i in range(1, 3):
+                entry = {
+                    "nendo": rec.get(f"seiseki_{i}_nendo", ""),
+                    "hon_shokin": rec.get(f"seiseki_{i}_hon_shokin", ""),
+                    "fuka_shokin": rec.get(f"seiseki_{i}_fuka_shokin", ""),
+                    "chakukaisu": [
+                        rec.get(f"seiseki_{i}_chaku_{j}", "0") for j in range(1, 7)
+                    ],
+                }
+                entry["chakukaisu"][5] = rec.get(f"seiseki_{i}_chaku_gai", "0")
+                seiseki.append(entry)
+            data["seiseki"] = str(seiseki)
+            self._upsert("jvd_banushi", data)
+            count += 1
+        self.conn.commit()
+        return count
+
+    def import_hr(self, records: list[dict]):
+        """HR（払戻）をインポート"""
+        columns = self._get_table_columns("jvd_haraimodoshi")
+        count = 0
+        for rec in records:
+            if rec.get("_record_type") != "HR":
+                continue
+            data = self._filter_columns(rec, columns)
+            # 各券種の払戻をJSON化
+            payoff_defs = [
+                ("tansho", 3, "umaban"),
+                ("fukusho", 5, "umaban"),
+                ("wakuren", 3, "kumiban"),
+                ("umaren", 3, "kumiban"),
+                ("wide", 7, "kumiban"),
+                ("umatan", 6, "kumiban"),
+                ("sanrenpuku", 3, "kumiban"),
+                ("sanrentan", 6, "kumiban"),
+            ]
+            for kenshu, max_n, ban_field in payoff_defs:
+                entries = []
+                for i in range(1, max_n + 1):
+                    ban = rec.get(f"{kenshu}_{ban_field}_{i}", "").strip()
+                    kin = rec.get(f"{kenshu}_haraimodoshi_{i}", "").strip()
+                    ninki = rec.get(f"{kenshu}_ninki_{i}", "").strip()
+                    if ban and ban != "0" * len(ban):
+                        entries.append({
+                            ban_field: ban,
+                            "haraimodoshi_kin": kin,
+                            "ninki": ninki,
+                        })
+                data[kenshu] = str(entries) if entries else None
+            self._upsert("jvd_haraimodoshi", data)
+            count += 1
+        self.conn.commit()
+        return count
+
     # ================================================================
     # 全年インポート用メソッド
     # ================================================================
@@ -232,13 +350,62 @@ class JVDataImporter:
         self.logger.info(f"HN（繁殖馬マスタ）: {n:,}件 インポート完了")
         return n
 
+    def import_ks_all(self) -> int:
+        """KS（騎手マスタ）を TFJ_KISI.DAT からインポート"""
+        self.logger.info("KS（騎手マスタ）インポート開始...")
+        recs = parse_file(f"{TFJV_DIR}/TFJ_KISI.DAT", {"KS"})
+        n = self.import_ks(recs)
+        self.logger.info(f"KS（騎手マスタ）: {n:,}件 インポート完了")
+        return n
+
+    def import_ch_all(self) -> int:
+        """CH（調教師マスタ）を TFJ_CHOK.DAT からインポート"""
+        self.logger.info("CH（調教師マスタ）インポート開始...")
+        recs = parse_file(f"{TFJV_DIR}/TFJ_CHOK.DAT", {"CH"})
+        n = self.import_ch(recs)
+        self.logger.info(f"CH（調教師マスタ）: {n:,}件 インポート完了")
+        return n
+
+    def import_br_all(self) -> int:
+        """BR（生産者マスタ）を BR_DATA からインポート"""
+        self.logger.info("BR（生産者マスタ）インポート開始...")
+        recs = []
+        br_dir = Path(f"{TFJV_DIR}/BR_DATA")
+        for fpath in sorted(br_dir.glob("TFJ_BR*.DAT")):
+            recs.extend(parse_file(str(fpath), {"BR"}))
+        n = self.import_br(recs)
+        self.logger.info(f"BR（生産者マスタ）: {n:,}件 インポート完了")
+        return n
+
+    def import_bn_all(self) -> int:
+        """BN（馬主マスタ）を OW_DATA からインポート"""
+        self.logger.info("BN（馬主マスタ）インポート開始...")
+        recs = []
+        ow_dir = Path(f"{TFJV_DIR}/OW_DATA")
+        for fpath in sorted(ow_dir.glob("TFJ_OW*.DAT")):
+            recs.extend(parse_file(str(fpath), {"BN"}))
+        n = self.import_bn(recs)
+        self.logger.info(f"BN（馬主マスタ）: {n:,}件 インポート完了")
+        return n
+
+    def import_masters(self, skip_hn: bool = False) -> dict:
+        """全マスタデータ（HN/KS/CH/BR/BN）を一括インポート"""
+        totals = {}
+        if not skip_hn:
+            totals["HN"] = self.import_hn_all()
+        totals["KS"] = self.import_ks_all()
+        totals["CH"] = self.import_ch_all()
+        totals["BR"] = self.import_br_all()
+        totals["BN"] = self.import_bn_all()
+        return totals
+
     def import_all_years(self, years: list[int], resume: bool = False) -> dict:
         """年リストを順にインポートする。エラーは年単位でスキップして継続する"""
         total_start = time.time()
         success_years = []
         failed_years = []
         skipped_years = []
-        grand_total = {"RA": 0, "SE": 0, "UM": 0, "SK": 0}
+        grand_total = {"RA": 0, "SE": 0, "UM": 0, "SK": 0, "HR": 0}
 
         if not years:
             self.logger.warning("対象年が空です")
@@ -341,11 +508,22 @@ class JVDataImporter:
                 self.logger.warning(f"  SK: UM_DATA/{year} フォルダなし — スキップ")
                 counts["SK"] = 0
 
+            # HR（払戻）
+            self.logger.info(f"HR（払戻）パース中... [{year}]")
+            try:
+                hr_recs = parse_directory(f"{TFJV_DIR}/SE_DATA", "SH*.DAT", {"HR"}, year=year)
+                counts["HR"] = self.import_hr(hr_recs)
+                self.logger.info(f"  HR: {counts['HR']:,}件")
+            except FileNotFoundError:
+                self.logger.warning(f"  HR: SE_DATA/{year} フォルダなし — スキップ")
+                counts["HR"] = 0
+
             elapsed = time.time() - t0
             self.logger.info(
                 f"{year}年 完了（{elapsed:.1f}秒）"
                 f" RA={counts.get('RA', 0):,} SE={counts.get('SE', 0):,}"
                 f" UM={counts.get('UM', 0):,} SK={counts.get('SK', 0):,}"
+                f" HR={counts.get('HR', 0):,}"
             )
             return counts
 
@@ -356,7 +534,10 @@ class JVDataImporter:
 
     def _log_summary(self):
         """各テーブルのレコード数をログ出力"""
-        tables = ["jvd_race", "jvd_race_uma", "jvd_uma", "jvd_sanku", "jvd_hanshoku"]
+        tables = [
+            "jvd_race", "jvd_race_uma", "jvd_uma", "jvd_sanku", "jvd_hanshoku",
+            "jvd_kishu", "jvd_chokyoshi", "jvd_seisansha", "jvd_banushi", "jvd_haraimodoshi",
+        ]
         self.logger.info(f"{'テーブル':<20} {'件数':>12}")
         self.logger.info("-" * 34)
         for table in tables:
@@ -392,6 +573,10 @@ def main():
                         help="インポート済み年をスキップ（jvd_race のレコード有無で判定）")
     parser.add_argument("--skip-hn", action="store_true",
                         help="HN（繁殖馬マスタ）インポートをスキップ（再実行時用）")
+    parser.add_argument("--skip-masters", action="store_true",
+                        help="マスタデータ（HN/KS/CH/BR/BN）インポートをスキップ")
+    parser.add_argument("--masters-only", action="store_true",
+                        help="マスタデータ（KS/CH/BR/BN）のみインポート（年別データはスキップ）")
     parser.add_argument("--db", type=str, default=DB_PATH, help="SQLiteデータベースパス")
     parser.add_argument("--log-file", type=str, default=default_log, help="ログファイルパス")
 
@@ -411,7 +596,12 @@ def main():
     importer.connect()
     importer.init_schema()
 
-    if args.all_years or args.start_year or args.end_year:
+    if args.masters_only:
+        # マスタのみモード（KS/CH/BR/BN + HN）
+        importer.import_masters(skip_hn=args.skip_hn)
+        importer._log_summary()
+
+    elif args.all_years or args.start_year or args.end_year:
         # 全年または年範囲モード
         all_years = JVDataImporter.detect_available_years(f"{TFJV_DIR}/SE_DATA")
         years = [
@@ -426,18 +616,18 @@ def main():
 
         logger.info(f"対象年: {years[0]}〜{years[-1]} ({len(years)}年分)")
 
-        if not args.skip_hn:
-            importer.import_hn_all()
+        if not args.skip_masters:
+            importer.import_masters(skip_hn=args.skip_hn)
         else:
-            logger.info("--skip-hn: HN インポートをスキップ")
+            logger.info("--skip-masters: マスタデータインポートをスキップ")
 
         importer.import_all_years(years, resume=args.resume)
 
     else:
         # 単年モード（従来互換）
         year = args.year or 2024
-        if not args.skip_hn:
-            importer.import_hn_all()
+        if not args.skip_masters:
+            importer.import_masters(skip_hn=args.skip_hn)
         importer.import_year(year=year)
         importer._log_summary()
 
