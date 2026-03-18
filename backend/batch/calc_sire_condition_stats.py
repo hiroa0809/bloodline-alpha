@@ -110,11 +110,14 @@ AGG_COLUMNS = """
 """
 
 
-def create_table(conn: sqlite3.Connection) -> None:
-    """sire_condition_stats テーブルを再作成"""
-    conn.execute("DROP TABLE IF EXISTS sire_condition_stats")
-    conn.execute("""
-        CREATE TABLE sire_condition_stats (
+WORK_TABLE = "sire_condition_stats_new"
+
+
+def create_work_table(conn: sqlite3.Connection) -> None:
+    """作業用テーブルを作成（集計完了後にアトミックスワップ）"""
+    conn.execute(f"DROP TABLE IF EXISTS {WORK_TABLE}")
+    conn.execute(f"""
+        CREATE TABLE {WORK_TABLE} (
             hanshoku_bango  TEXT NOT NULL,
             role            TEXT NOT NULL,
             condition_type  TEXT NOT NULL,
@@ -162,7 +165,10 @@ def build_sire_mapping(conn: sqlite3.Connection) -> int:
         ketto_bango, sandai_raw = row
         try:
             ketto_list = ast.literal_eval(sandai_raw)
-        except (ValueError, SyntaxError):
+            if not isinstance(ketto_list, list):
+                errors += 1
+                continue
+        except (ValueError, SyntaxError, TypeError, RecursionError, MemoryError):
             errors += 1
             continue
 
@@ -225,7 +231,7 @@ def _build_condition_aggregate_sql(
     where_clause = COMMON_WHERE.format(bango_col=bango_col) + "\n      " + extra_where
 
     return f"""
-        INSERT INTO sire_condition_stats
+        INSERT INTO {WORK_TABLE}
             (hanshoku_bango, role, condition_type, condition_value, bamei,
              starts, wins, second, third, win_rate, rentai_rate, fukusho_rate, tansho_roi, updated_at)
         SELECT
@@ -268,9 +274,20 @@ def aggregate_condition_stats(conn: sqlite3.Connection, role: str, condition_typ
     return count
 
 
+def swap_table(conn: sqlite3.Connection) -> None:
+    """作業テーブルを本番テーブルにアトミックスワップ"""
+    logger.info("テーブルをアトミックスワップ中...")
+    conn.execute("BEGIN")
+    conn.execute("DROP TABLE IF EXISTS sire_condition_stats")
+    conn.execute(f"ALTER TABLE {WORK_TABLE} RENAME TO sire_condition_stats")
+    conn.commit()
+    logger.info("スワップ完了")
+
+
 def cleanup(conn: sqlite3.Connection) -> None:
     """一時テーブルを削除"""
     conn.execute("DROP TABLE IF EXISTS _tmp_uma_sire")
+    conn.execute(f"DROP TABLE IF EXISTS {WORK_TABLE}")
     conn.commit()
 
 
@@ -287,7 +304,7 @@ def main() -> None:
     start = time.time()
 
     try:
-        create_table(conn)
+        create_work_table(conn)
         build_sire_mapping(conn)
 
         # インデックス作成（集計クエリ高速化）
@@ -306,11 +323,14 @@ def main() -> None:
         logger.info("=== 集計結果サマリー ===")
         logger.info(f"合計: {total_rows:,} 件")
         rows = conn.execute(
-            "SELECT role, condition_type, COUNT(*), SUM(starts), SUM(wins) "
-            "FROM sire_condition_stats GROUP BY role, condition_type ORDER BY role, condition_type"
+            f"SELECT role, condition_type, COUNT(*), SUM(starts), SUM(wins) "
+            f"FROM {WORK_TABLE} GROUP BY role, condition_type ORDER BY role, condition_type"
         ).fetchall()
         for r in rows:
             logger.info(f"  {r[0]:4s} / {r[1]:10s}: {r[2]:>6,} 件, 延べ {r[3]:>10,} 走, {r[4]:>7,} 勝")
+
+        # アトミックスワップ（全集計成功後に入れ替え）
+        swap_table(conn)
 
     finally:
         cleanup(conn)

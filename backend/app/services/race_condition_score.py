@@ -6,12 +6,11 @@ B1: 馬場（芝/ダート）、B2: 距離帯、B3: 開催地、B4: 馬場状態
 """
 
 import asyncio
+import bisect
 import logging
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
-
-from app.services.bloodline_score import _percentile_rank
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +30,16 @@ _condition_cache_lock = asyncio.Lock()
 _MIN_STARTS = 5
 
 
+# --- ユーティリティ ---
+
+def _percentile_rank(sorted_values: list[float], value: float) -> float:
+    """ソート済みリスト中での百分位（0.0〜1.0）を返す"""
+    if not sorted_values:
+        return 0.0
+    idx = bisect.bisect_right(sorted_values, value)
+    return idx / len(sorted_values)
+
+
 # --- 入力値変換ヘルパー ---
 
 def _track_to_surface(track_code: str) -> str | None:
@@ -45,12 +54,12 @@ def _track_to_surface(track_code: str) -> str | None:
     return None
 
 
-def _kyori_to_distance_band(kyori: str) -> str:
-    """距離(m) → 'sprint' / 'mile' / 'middle' / 'long'"""
+def _kyori_to_distance_band(kyori: str) -> str | None:
+    """距離(m) → 'sprint' / 'mile' / 'middle' / 'long' / None(変換不能)"""
     try:
         d = int(kyori)
     except (ValueError, TypeError):
-        return "mile"  # フォールバック
+        return None
     if d <= 1400:
         return "sprint"
     if d <= 1800:

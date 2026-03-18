@@ -176,10 +176,10 @@ async def get_score(race_id: str, db: AsyncSession = Depends(get_db)):
     for uma in umas:
         umaban, bamei, ketto_bango, odds_str, ninki_str, sandai_ketto = uma
 
-        bloodline = calc_bloodline_score(sandai_ketto)
+        sire_bango, bms_bango = parse_sandai_ketto(sandai_ketto)
+        bloodline = calc_bloodline_score(sire_bango, bms_bango)
 
         # カテゴリB: レース条件スコア
-        sire_bango, bms_bango = parse_sandai_ketto(sandai_ketto)
         condition = calc_race_condition_score(
             sire_bango=sire_bango,
             bms_bango=bms_bango,
