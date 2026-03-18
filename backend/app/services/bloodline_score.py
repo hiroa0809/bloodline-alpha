@@ -85,7 +85,8 @@ async def ensure_percentile_cache(db: AsyncSession) -> None:
 async def refresh_percentile_cache(db: AsyncSession) -> None:
     """キャッシュを強制再構築する（sire_statsバッチ実行後に呼ぶ）"""
     global _percentile_cache
-    _percentile_cache = await _build_percentile_cache(db)
+    async with _cache_lock:
+        _percentile_cache = await _build_percentile_cache(db)
 
 
 def _calc_sub_score(role: str, hanshoku_bango: str, weight: float) -> tuple[float, dict | None]:
