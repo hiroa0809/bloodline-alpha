@@ -23,7 +23,7 @@ DEFAULT_WEIGHTS = {
     "A5": 6,    # アウトブリード（未実装）
 }
 
-# パーセンタイル算出用キャッシュ（サーバー起動中は保持）
+# パーセンタイル算出用キャッシュ（サーバー起動中は保持、アトミックに差し替え）
 _percentile_cache: dict = {}
 
 
@@ -35,8 +35,9 @@ def _percentile_rank(sorted_values: list[float], value: float) -> float:
     return idx / len(sorted_values)
 
 
-async def _build_percentile_cache(db: AsyncSession) -> None:
-    """sire_stats から role 別にソート済みリストを構築してキャッシュ"""
+async def _build_percentile_cache(db: AsyncSession) -> dict:
+    """sire_stats から role 別にソート済みリストを構築して新しいキャッシュを返す"""
+    new_cache = {}
     for role in ("sire", "bms"):
         result = await db.execute(
             text(
@@ -55,7 +56,7 @@ async def _build_percentile_cache(db: AsyncSession) -> None:
         # hanshoku_bango → (bamei, win_rate, roi) のルックアップ
         lookup = {r[0]: {"bamei": r[1], "win_rate": r[2], "roi": r[3]} for r in rows}
 
-        _percentile_cache[role] = {
+        new_cache[role] = {
             "win_rates": win_rates,
             "rois": rois,
             "lookup": lookup,
@@ -63,9 +64,23 @@ async def _build_percentile_cache(db: AsyncSession) -> None:
 
     logger.info(
         f"パーセンタイルキャッシュ構築完了: "
-        f"sire={len(_percentile_cache['sire']['lookup'])}頭, "
-        f"bms={len(_percentile_cache['bms']['lookup'])}頭"
+        f"sire={len(new_cache['sire']['lookup'])}頭, "
+        f"bms={len(new_cache['bms']['lookup'])}頭"
     )
+    return new_cache
+
+
+async def ensure_percentile_cache(db: AsyncSession) -> None:
+    """キャッシュが空なら構築する。呼び出し元でループ前に1回呼ぶ。"""
+    global _percentile_cache
+    if not _percentile_cache:
+        _percentile_cache = await _build_percentile_cache(db)
+
+
+async def refresh_percentile_cache(db: AsyncSession) -> None:
+    """キャッシュを強制再構築する（sire_statsバッチ実行後に呼ぶ）"""
+    global _percentile_cache
+    _percentile_cache = await _build_percentile_cache(db)
 
 
 def _calc_sub_score(role: str, hanshoku_bango: str, weight: float) -> tuple[float, dict | None]:
@@ -97,12 +112,11 @@ def _calc_sub_score(role: str, hanshoku_bango: str, weight: float) -> tuple[floa
     }
 
 
-async def calc_bloodline_score(
-    db: AsyncSession,
-    ketto_toroku_bango: str,
-) -> dict:
+def calc_bloodline_score(sandai_ketto_str: str | None) -> dict:
     """
     1頭分のカテゴリAスコアを計算して返す。
+    DBアクセスなし — sandai_ketto文字列を直接受け取る（N+1回避）。
+    事前に ensure_percentile_cache() を呼んでおくこと。
 
     返却例:
     {
@@ -111,23 +125,12 @@ async def calc_bloodline_score(
         "sire_info": {...}, "bms_info": {...}
     }
     """
-    # キャッシュが空なら構築
-    if not _percentile_cache:
-        await _build_percentile_cache(db)
-
-    # jvd_uma から sandai_ketto を取得
-    result = await db.execute(
-        text("SELECT sandai_ketto FROM jvd_uma WHERE ketto_toroku_bango = :bango"),
-        {"bango": ketto_toroku_bango},
-    )
-    row = result.fetchone()
-
     sire_bango = None
     bms_bango = None
 
-    if row and row[0]:
+    if sandai_ketto_str:
         try:
-            ketto_list = ast.literal_eval(row[0])
+            ketto_list = ast.literal_eval(sandai_ketto_str)
             if len(ketto_list) > 0 and isinstance(ketto_list[0], dict):
                 sire_bango = ketto_list[0].get("hanshoku_toroku_bango", "").strip() or None
             if len(ketto_list) > 4 and isinstance(ketto_list[4], dict):

@@ -13,7 +13,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.services.bloodline_score import calc_bloodline_score
+from app.services.bloodline_score import calc_bloodline_score, ensure_percentile_cache
 
 router = APIRouter(prefix="/api/v1/score", tags=["Scoring"])
 
@@ -58,6 +58,11 @@ def parse_race_id(race_id: str) -> dict:
         raise HTTPException(
             status_code=400,
             detail=f"race_id は16桁である必要があります（入力: {len(race_id)}桁）",
+        )
+    if not race_id.isdigit():
+        raise HTTPException(
+            status_code=400,
+            detail="race_id は数字のみで構成される必要があります",
         )
     return {
         "kaisai_nen": race_id[0:4],
@@ -117,15 +122,17 @@ async def get_score(race_id: str, db: AsyncSession = Depends(get_db)):
 
     race_name = (race[0] or race[1] or "").strip()
 
-    # 出走馬一覧を取得
+    # 出走馬一覧を取得（JOINで sandai_ketto も一括取得 — N+1回避）
     uma_result = await db.execute(
         text(
-            "SELECT umaban, bamei, ketto_toroku_bango, tansho_odds, tansho_ninki_jun "
-            "FROM jvd_race_uma "
-            "WHERE kaisai_nen = :kaisai_nen AND kaisai_tsukihi = :kaisai_tsukihi "
-            "  AND keibajo_code = :keibajo_code AND kaisai_kai = :kaisai_kai "
-            "  AND kaisai_nichime = :kaisai_nichime AND race_bango = :race_bango "
-            "ORDER BY CAST(umaban AS INTEGER)"
+            "SELECT ru.umaban, ru.bamei, ru.ketto_toroku_bango, "
+            "  ru.tansho_odds, ru.tansho_ninki_jun, u.sandai_ketto "
+            "FROM jvd_race_uma ru "
+            "LEFT JOIN jvd_uma u ON ru.ketto_toroku_bango = u.ketto_toroku_bango "
+            "WHERE ru.kaisai_nen = :kaisai_nen AND ru.kaisai_tsukihi = :kaisai_tsukihi "
+            "  AND ru.keibajo_code = :keibajo_code AND ru.kaisai_kai = :kaisai_kai "
+            "  AND ru.kaisai_nichime = :kaisai_nichime AND ru.race_bango = :race_bango "
+            "ORDER BY CAST(ru.umaban AS INTEGER)"
         ),
         pk,
     )
@@ -133,12 +140,15 @@ async def get_score(race_id: str, db: AsyncSession = Depends(get_db)):
     if not umas:
         raise HTTPException(status_code=404, detail="出走馬が見つかりません")
 
+    # パーセンタイルキャッシュを事前構築（ループ内での遅延初期化を回避）
+    await ensure_percentile_cache(db)
+
     # 各出走馬の血統スコアを計算
     predictions = []
     for uma in umas:
-        umaban, bamei, ketto_bango, odds_str, ninki_str = uma
+        umaban, bamei, ketto_bango, odds_str, ninki_str, sandai_ketto = uma
 
-        bloodline = await calc_bloodline_score(db, ketto_bango)
+        bloodline = calc_bloodline_score(sandai_ketto)
 
         predictions.append(
             PredictionItem(
