@@ -354,7 +354,11 @@ class JVDataImporter:
     def import_ks_all(self) -> int:
         """KS（騎手マスタ）を TFJ_KISI.DAT からインポート"""
         self.logger.info("KS（騎手マスタ）インポート開始...")
-        recs = parse_file(f"{TFJV_DIR}/TFJ_KISI.DAT", {"KS"})
+        try:
+            recs = parse_file(f"{TFJV_DIR}/TFJ_KISI.DAT", {"KS"})
+        except FileNotFoundError:
+            self.logger.warning("KS: TFJ_KISI.DAT が見つからないためスキップ")
+            return 0
         n = self.import_ks(recs)
         self.logger.info(f"KS（騎手マスタ）: {n:,}件 インポート完了")
         return n
@@ -362,7 +366,11 @@ class JVDataImporter:
     def import_ch_all(self) -> int:
         """CH（調教師マスタ）を TFJ_CHOK.DAT からインポート"""
         self.logger.info("CH（調教師マスタ）インポート開始...")
-        recs = parse_file(f"{TFJV_DIR}/TFJ_CHOK.DAT", {"CH"})
+        try:
+            recs = parse_file(f"{TFJV_DIR}/TFJ_CHOK.DAT", {"CH"})
+        except FileNotFoundError:
+            self.logger.warning("CH: TFJ_CHOK.DAT が見つからないためスキップ")
+            return 0
         n = self.import_ch(recs)
         self.logger.info(f"CH（調教師マスタ）: {n:,}件 インポート完了")
         return n

@@ -85,7 +85,10 @@ def build_sire_mapping(conn: sqlite3.Connection) -> int:
                 ketto_list = json.loads(sandai_raw)
             except (json.JSONDecodeError, TypeError):
                 ketto_list = ast.literal_eval(sandai_raw)
-        except (ValueError, SyntaxError):
+            if not isinstance(ketto_list, list):
+                errors += 1
+                continue
+        except (ValueError, SyntaxError, TypeError, RecursionError, MemoryError):
             errors += 1
             continue
 
