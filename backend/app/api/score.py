@@ -1,81 +1,210 @@
+"""
+スコアリングAPI
+
+GET /api/v1/score/{race_id} — 実データによる血統スコアリング
+GET /api/v1/score/mock/{race_id} — デモ用モックデータ
+"""
+
+from __future__ import annotations
+
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, and_, func
-from sqlalchemy.orm import selectinload
-from decimal import Decimal
 
 from app.core.database import get_db
-from app.models.models import Horse, Race, RaceResult, Pedigree, SireStat
+from app.services.bloodline_score import calc_bloodline_score, ensure_percentile_cache
 
 router = APIRouter(prefix="/api/v1/score", tags=["Scoring"])
 
-@router.get("/mock/{race_id}")
-async def get_mock_score(race_id: str, db: AsyncSession = Depends(get_db)):
-    """
-    [MVP用モック] 
-    要求されたレースに対して、全出走馬のダミースコアと市場乖離を返す。
-    本来はここで100点満点のスコアと期待値を計算するが、取得データが貯まるまでの繋ぎ。
-    """
-    
-    # 1. データベースから出走馬一覧を取得
-    stmt = select(RaceResult).filter(RaceResult.race_id == race_id).order_by(RaceResult.horse_number)
-    result = await db.execute(stmt)
-    race_results = result.scalars().all()
-    
-    if not race_results:
-        # デモ用に固定のダミーデータを返す（UI開発用）
-        return {
-            "race_id": race_id,
-            "predictions": [
-                {"horse_id": "dummy1", "horse_number": 1, "horse_name": "リアルスティール産駒", "score": 85, "score_details": {"bloodline": 55, "condition": 18, "human": 12}, "odds": 5.5, "popularity": 3, "expected_value": 1.45},
-                {"horse_id": "dummy2", "horse_number": 2, "horse_name": "過剰人気馬", "score": 45, "score_details": {"bloodline": 20, "condition": 15, "human": 10}, "odds": 1.8, "popularity": 1, "expected_value": 0.55},
-                {"horse_id": "dummy3", "horse_number": 3, "horse_name": "穴馬", "score": 75, "score_details": {"bloodline": 50, "condition": 15, "human": 10}, "odds": 25.0, "popularity": 8, "expected_value": 1.30}
-            ]
-        }
 
-    # 2. ここから先は実データがある場合の処理
-    predictions = []
-    for r in race_results:
-        # 馬情報取得
-        horse_stmt = select(Horse).filter(Horse.horse_id == r.horse_id)
-        h_res = await db.execute(horse_stmt)
-        horse = h_res.scalars().first()
-        horse_name = horse.name if horse else f"Horse_{r.horse_number}"
-        
-        # 本格実装(Phase1)ではここで sire_stats 等から点数計算を実施する
-        # 現状はオッズの逆相関にランダム性を加えたモックスコアを生成
-        base_score = 100 - (float(r.odds) if r.odds else 50)
-        mock_score = max(10, min(95, base_score + (hash(r.horse_id) % 20 - 10)))
-        
-        # 内訳の疑似計算 (血統65点、適性20点、陣営15点満点に近い比率で分割)
-        b_score = mock_score * 0.65
-        c_score = mock_score * 0.20
-        h_score = mock_score * 0.15
-        
-        # 期待値の疑似計算
-        prob = mock_score / 100.0 * 0.5 # 勝率の概念
-        ev = prob * float(r.odds) if r.odds else 0.8
+# --- Pydantic レスポンスモデル（Swagger UI 表示用） ---
 
-        predictions.append({
-            "horse_id": r.horse_id,
-            "horse_number": r.gate_number or r.horse_number,
-            "horse_name": horse_name,
-            "jockey": r.jockey,
-            "odds": float(r.odds) if r.odds else 0.0,
-            "popularity": r.popularity,
-            "score": round(mock_score, 1),
-            "score_details": {
-                "bloodline": round(b_score, 1),
-                "condition": round(c_score, 1),
-                "human": round(h_score, 1)
-            },
-            "expected_value": round(ev, 2)
-        })
-        
-    # スコア降順でソート
-    predictions.sort(key=lambda x: x["score"], reverse=True)
-    
+class SireInfo(BaseModel):
+    name: str
+    hanshoku_bango: str
+    win_rate: float
+    roi: float
+
+
+class CategoryDetail(BaseModel):
+    total: float
+    details: dict[str, float]
+
+
+class PredictionItem(BaseModel):
+    horse_number: int
+    horse_name: str
+    ketto_toroku_bango: str
+    odds: float
+    popularity: int
+    total_score: float
+    category_scores: dict[str, CategoryDetail]
+    sire_info: SireInfo | None = None
+    bms_info: SireInfo | None = None
+
+
+class RaceScoreResponse(BaseModel):
+    race_id: str
+    race_name: str
+    predictions: list[PredictionItem]
+
+
+# --- ユーティリティ ---
+
+def parse_race_id(race_id: str) -> dict:
+    """16桁の race_id を6カラムPKに分解"""
+    if len(race_id) != 16:
+        raise HTTPException(
+            status_code=400,
+            detail=f"race_id は16桁である必要があります（入力: {len(race_id)}桁）",
+        )
+    if not race_id.isdigit():
+        raise HTTPException(
+            status_code=400,
+            detail="race_id は数字のみで構成される必要があります",
+        )
     return {
-        "race_id": race_id,
-        "predictions": predictions
+        "kaisai_nen": race_id[0:4],
+        "kaisai_tsukihi": race_id[4:8],
+        "keibajo_code": race_id[8:10],
+        "kaisai_kai": race_id[10:12],
+        "kaisai_nichime": race_id[12:14],
+        "race_bango": race_id[14:16],
     }
+
+
+def parse_odds(odds_str: str | None) -> float:
+    """JV-Data 単勝オッズ（4桁文字列）を float に変換"""
+    try:
+        return int(odds_str) / 10.0
+    except (ValueError, TypeError):
+        return 0.0
+
+
+def safe_int(value: str | None, default: int = 0) -> int:
+    """文字列を安全に int に変換。失敗時は default を返す。"""
+    try:
+        return int(value)
+    except (ValueError, TypeError):
+        return default
+
+
+# --- エンドポイント ---
+
+@router.get("/mock/{race_id}", response_model=RaceScoreResponse)
+async def get_mock_score(race_id: str):
+    """[デモ用] 固定のダミースコアを返す"""
+    return RaceScoreResponse(
+        race_id=race_id,
+        race_name="デモ用レース",
+        predictions=[
+            PredictionItem(
+                horse_number=1, horse_name="リアルスティール産駒", ketto_toroku_bango="0000000000",
+                odds=5.5, popularity=3, total_score=85,
+                category_scores={"A": CategoryDetail(total=55, details={"A1": 35, "A2": 20}), "B": CategoryDetail(total=18, details={}), "C": CategoryDetail(total=12, details={}), "D": CategoryDetail(total=0, details={}), "E": CategoryDetail(total=0, details={})},
+            ),
+            PredictionItem(
+                horse_number=2, horse_name="過剰人気馬", ketto_toroku_bango="0000000001",
+                odds=1.8, popularity=1, total_score=45,
+                category_scores={"A": CategoryDetail(total=20, details={"A1": 12, "A2": 8}), "B": CategoryDetail(total=15, details={}), "C": CategoryDetail(total=10, details={}), "D": CategoryDetail(total=0, details={}), "E": CategoryDetail(total=0, details={})},
+            ),
+            PredictionItem(
+                horse_number=3, horse_name="穴馬", ketto_toroku_bango="0000000002",
+                odds=25.0, popularity=8, total_score=75,
+                category_scores={"A": CategoryDetail(total=50, details={"A1": 30, "A2": 20}), "B": CategoryDetail(total=15, details={}), "C": CategoryDetail(total=10, details={}), "D": CategoryDetail(total=0, details={}), "E": CategoryDetail(total=0, details={})},
+            ),
+        ],
+    )
+
+
+@router.get("/{race_id}", response_model=RaceScoreResponse)
+async def get_score(race_id: str, db: AsyncSession = Depends(get_db)):
+    """
+    指定レースの全出走馬に対して血統スコア（カテゴリA）を計算して返す。
+    race_id: 16桁（年4+月日4+競馬場2+回2+日目2+レース番号2）
+    """
+    pk = parse_race_id(race_id)
+
+    # レース情報を取得
+    race_result = await db.execute(
+        text(
+            "SELECT kyoso_mei_hondai, kyoso_mei_ryakusho10, kyori, track_code "
+            "FROM jvd_race "
+            "WHERE kaisai_nen = :kaisai_nen AND kaisai_tsukihi = :kaisai_tsukihi "
+            "  AND keibajo_code = :keibajo_code AND kaisai_kai = :kaisai_kai "
+            "  AND kaisai_nichime = :kaisai_nichime AND race_bango = :race_bango"
+        ),
+        pk,
+    )
+    race = race_result.fetchone()
+    if not race:
+        raise HTTPException(status_code=404, detail="レースが見つかりません")
+
+    race_name = (race[0] or race[1] or "").strip()
+
+    # 出走馬一覧を取得（JOINで sandai_ketto も一括取得 — N+1回避）
+    uma_result = await db.execute(
+        text(
+            "SELECT ru.umaban, ru.bamei, ru.ketto_toroku_bango, "
+            "  ru.tansho_odds, ru.tansho_ninki_jun, u.sandai_ketto "
+            "FROM jvd_race_uma ru "
+            "LEFT JOIN jvd_uma u ON ru.ketto_toroku_bango = u.ketto_toroku_bango "
+            "WHERE ru.kaisai_nen = :kaisai_nen AND ru.kaisai_tsukihi = :kaisai_tsukihi "
+            "  AND ru.keibajo_code = :keibajo_code AND ru.kaisai_kai = :kaisai_kai "
+            "  AND ru.kaisai_nichime = :kaisai_nichime AND ru.race_bango = :race_bango "
+            "ORDER BY CAST(ru.umaban AS INTEGER)"
+        ),
+        pk,
+    )
+    umas = uma_result.fetchall()
+    if not umas:
+        raise HTTPException(status_code=404, detail="出走馬が見つかりません")
+
+    # パーセンタイルキャッシュを事前構築（ループ内での遅延初期化を回避）
+    await ensure_percentile_cache(db)
+
+    # 各出走馬の血統スコアを計算
+    predictions = []
+    for uma in umas:
+        umaban, bamei, ketto_bango, odds_str, ninki_str, sandai_ketto = uma
+
+        bloodline = calc_bloodline_score(sandai_ketto)
+
+        predictions.append(
+            PredictionItem(
+                horse_number=safe_int(umaban),
+                horse_name=(bamei or "").strip(),
+                ketto_toroku_bango=ketto_bango or "",
+                odds=parse_odds(odds_str),
+                popularity=safe_int(ninki_str),
+                total_score=bloodline["total"],
+                category_scores={
+                    "A": CategoryDetail(
+                        total=bloodline["total"],
+                        details={
+                            "A1": bloodline["A1"],
+                            "A2": bloodline["A2"],
+                            "A3": bloodline["A3"],
+                            "A4": bloodline["A4"],
+                            "A5": bloodline["A5"],
+                        },
+                    ),
+                    "B": CategoryDetail(total=0, details={}),
+                    "C": CategoryDetail(total=0, details={}),
+                    "D": CategoryDetail(total=0, details={}),
+                    "E": CategoryDetail(total=0, details={}),
+                },
+                sire_info=SireInfo(**bloodline["sire_info"]) if bloodline["sire_info"] else None,
+                bms_info=SireInfo(**bloodline["bms_info"]) if bloodline["bms_info"] else None,
+            )
+        )
+
+    # スコア降順ソート
+    predictions.sort(key=lambda x: x.total_score, reverse=True)
+
+    return RaceScoreResponse(
+        race_id=race_id,
+        race_name=race_name,
+        predictions=predictions,
+    )
