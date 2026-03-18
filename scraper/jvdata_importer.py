@@ -378,9 +378,16 @@ class JVDataImporter:
     def import_br_all(self) -> int:
         """BR（生産者マスタ）を BR_DATA からインポート"""
         self.logger.info("BR（生産者マスタ）インポート開始...")
-        recs = []
         br_dir = Path(f"{TFJV_DIR}/BR_DATA")
-        for fpath in sorted(br_dir.glob("TFJ_BR*.DAT")):
+        if not br_dir.is_dir():
+            self.logger.warning(f"BR: {br_dir} が見つからないためスキップ")
+            return 0
+        recs = []
+        files = sorted(br_dir.glob("TFJ_BR*.DAT"))
+        if not files:
+            self.logger.warning("BR: TFJ_BR*.DAT が見つからないためスキップ")
+            return 0
+        for fpath in files:
             recs.extend(parse_file(str(fpath), {"BR"}))
         n = self.import_br(recs)
         self.logger.info(f"BR（生産者マスタ）: {n:,}件 インポート完了")
@@ -389,9 +396,16 @@ class JVDataImporter:
     def import_bn_all(self) -> int:
         """BN（馬主マスタ）を OW_DATA からインポート"""
         self.logger.info("BN（馬主マスタ）インポート開始...")
-        recs = []
         ow_dir = Path(f"{TFJV_DIR}/OW_DATA")
-        for fpath in sorted(ow_dir.glob("TFJ_OW*.DAT")):
+        if not ow_dir.is_dir():
+            self.logger.warning(f"BN: {ow_dir} が見つからないためスキップ")
+            return 0
+        recs = []
+        files = sorted(ow_dir.glob("TFJ_OW*.DAT"))
+        if not files:
+            self.logger.warning("BN: TFJ_OW*.DAT が見つからないためスキップ")
+            return 0
+        for fpath in files:
             recs.extend(parse_file(str(fpath), {"BN"}))
         n = self.import_bn(recs)
         self.logger.info(f"BN（馬主マスタ）: {n:,}件 インポート完了")
@@ -629,10 +643,10 @@ def main():
 
         logger.info(f"対象年: {years[0]}〜{years[-1]} ({len(years)}年分)")
 
-        if not args.skip_masters:
-            importer.import_masters(skip_hn=args.skip_hn)
+        if args.skip_masters or args.resume:
+            logger.info(f"{'--skip-masters' if args.skip_masters else '--resume'}: マスタデータインポートをスキップ")
         else:
-            logger.info("--skip-masters: マスタデータインポートをスキップ")
+            importer.import_masters(skip_hn=args.skip_hn)
 
         importer.import_all_years(years, resume=args.resume)
 
