@@ -619,6 +619,8 @@ def main():
         parser.error("--masters-only と年指定オプション（--year/--all-years/--start-year/--end-year）は同時指定できません")
     if args.masters_only and args.skip_masters:
         parser.error("--masters-only と --skip-masters は同時指定できません")
+    if args.masters_only and args.resume:
+        parser.error("--masters-only と --resume は同時指定できません")
 
     # ロギング初期化
     logger = setup_logging(args.log_file)
