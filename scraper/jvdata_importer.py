@@ -239,11 +239,11 @@ class JVDataImporter:
                     "hon_shokin": rec.get(f"seiseki_{i}_hon_shokin", ""),
                     "fuka_shokin": rec.get(f"seiseki_{i}_fuka_shokin", ""),
                     "chakukaisu": [
-                        rec.get(f"seiseki_{i}_chaku_{j}", "0") for j in range(1, 7)
+                        rec.get(f"seiseki_{i}_chaku_{j}", "0") for j in range(1, 6)
+                    ] + [
+                        rec.get(f"seiseki_{i}_chaku_gai", "0")
                     ],
                 }
-                # chaku_gai は6番目
-                entry["chakukaisu"][5] = rec.get(f"seiseki_{i}_chaku_gai", "0")
                 seiseki.append(entry)
             data["seiseki"] = json.dumps(seiseki, ensure_ascii=False)
             self._upsert("jvd_seisansha", data)
@@ -343,9 +343,16 @@ class JVDataImporter:
     def import_hn_all(self) -> int:
         """HN（繁殖馬マスタ）を KT_DATA から全件インポート（1回のみ実行）"""
         self.logger.info("HN（繁殖馬マスタ）インポート開始...")
-        hn_recs = []
         kt_dir = Path(f"{TFJV_DIR}/KT_DATA")
-        for fpath in sorted(kt_dir.glob("KT2*.DAT")):
+        if not kt_dir.is_dir():
+            self.logger.warning(f"HN: {kt_dir} が見つからないためスキップ")
+            return 0
+        files = sorted(kt_dir.glob("KT2*.DAT"))
+        if not files:
+            self.logger.warning("HN: KT2*.DAT が見つからないためスキップ")
+            return 0
+        hn_recs = []
+        for fpath in files:
             hn_recs.extend(parse_file(str(fpath), {"HN"}))
         n = self.import_hn(hn_recs)
         self.logger.info(f"HN（繁殖馬マスタ）: {n:,}件 インポート完了")
@@ -593,7 +600,7 @@ def main():
 
     # オプション
     parser.add_argument("--resume", action="store_true",
-                        help="インポート済み年をスキップ（jvd_race のレコード有無で判定）")
+                        help="インポート済み年をスキップ（jvd_race のレコード有無で判定）。マスタデータもスキップされます")
     parser.add_argument("--skip-hn", action="store_true",
                         help="HN（繁殖馬マスタ）インポートをスキップ（再実行時用）")
     parser.add_argument("--skip-masters", action="store_true",
