@@ -469,6 +469,28 @@ CREATE TABLE IF NOT EXISTS sire_stats (
 );
 
 -- ============================================================
+-- 集計テーブル: 種牡馬・母父(BMS)別 条件別成績
+-- スコアリングエンジン カテゴリB (B1:馬場, B2:距離, B3:開催地, B4:馬場状態) の土台
+-- ============================================================
+CREATE TABLE IF NOT EXISTS sire_condition_stats (
+    hanshoku_bango  TEXT NOT NULL,       -- 繁殖登録番号
+    role            TEXT NOT NULL,       -- 'sire'(父) / 'bms'(母父)
+    condition_type  TEXT NOT NULL,       -- 'surface' / 'distance' / 'venue' / 'going'
+    condition_value TEXT NOT NULL,       -- 'turf','dirt' / 'sprint','mile','middle','long' / '01'-'10' / 'turf_good' 等
+    bamei           TEXT,                -- 馬名
+    starts          INTEGER DEFAULT 0,   -- 延べ出走回数
+    wins            INTEGER DEFAULT 0,   -- 1着回数
+    second          INTEGER DEFAULT 0,   -- 2着回数
+    third           INTEGER DEFAULT 0,   -- 3着回数
+    win_rate        REAL DEFAULT 0,      -- 勝率 (wins / starts)
+    rentai_rate     REAL DEFAULT 0,      -- 連対率 ((wins + second) / starts)
+    fukusho_rate    REAL DEFAULT 0,      -- 複勝率 ((wins + second + third) / starts)
+    tansho_roi      REAL DEFAULT 0,      -- 単勝回収率
+    updated_at      TEXT,                -- 最終更新日時 (ISO 8601)
+    PRIMARY KEY (hanshoku_bango, role, condition_type, condition_value)
+);
+
+-- ============================================================
 -- インデックス
 -- ============================================================
 
