@@ -118,10 +118,36 @@ def _calc_sub_score(role: str, hanshoku_bango: str, weight: float) -> tuple[floa
     }
 
 
-def calc_bloodline_score(sandai_ketto_str: str | None) -> dict:
+def parse_sandai_ketto(sandai_ketto_str: str | None) -> tuple[str | None, str | None]:
+    """
+    sandai_ketto文字列から父(sire)・母父(BMS)の繁殖登録番号を抽出する。
+    返却: (sire_bango, bms_bango)
+    """
+    sire_bango = None
+    bms_bango = None
+
+    if sandai_ketto_str:
+        try:
+            ketto_list = ast.literal_eval(sandai_ketto_str)
+            if not isinstance(ketto_list, list):
+                return None, None
+            if len(ketto_list) > 0 and isinstance(ketto_list[0], dict):
+                sire_bango = ketto_list[0].get("hanshoku_toroku_bango", "").strip() or None
+            if len(ketto_list) > 4 and isinstance(ketto_list[4], dict):
+                bms_bango = ketto_list[4].get("hanshoku_toroku_bango", "").strip() or None
+        except (ValueError, SyntaxError, RecursionError, MemoryError, TypeError, AttributeError, KeyError):
+            pass
+
+    return sire_bango, bms_bango
+
+
+def calc_bloodline_score(
+    sire_bango: str | None,
+    bms_bango: str | None,
+) -> dict:
     """
     1頭分のカテゴリAスコアを計算して返す。
-    DBアクセスなし — sandai_ketto文字列を直接受け取る（N+1回避）。
+    DBアクセスなし — 事前にパース済みの繁殖番号を受け取る。
     事前に ensure_percentile_cache() を呼んでおくこと。
 
     返却例:
@@ -133,19 +159,6 @@ def calc_bloodline_score(sandai_ketto_str: str | None) -> dict:
     """
     if not _percentile_cache:
         logger.warning("パーセンタイルキャッシュが未初期化です。ensure_percentile_cache()を呼んでください。")
-
-    sire_bango = None
-    bms_bango = None
-
-    if sandai_ketto_str:
-        try:
-            ketto_list = ast.literal_eval(sandai_ketto_str)
-            if len(ketto_list) > 0 and isinstance(ketto_list[0], dict):
-                sire_bango = ketto_list[0].get("hanshoku_toroku_bango", "").strip() or None
-            if len(ketto_list) > 4 and isinstance(ketto_list[4], dict):
-                bms_bango = ketto_list[4].get("hanshoku_toroku_bango", "").strip() or None
-        except (ValueError, SyntaxError, RecursionError, MemoryError, TypeError, AttributeError):
-            pass
 
     # A1: 父成績
     a1_score, sire_info = _calc_sub_score("sire", sire_bango, DEFAULT_WEIGHTS["A1"])

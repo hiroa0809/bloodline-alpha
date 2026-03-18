@@ -13,7 +13,8 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.services.bloodline_score import calc_bloodline_score, ensure_percentile_cache
+from app.services.bloodline_score import calc_bloodline_score, ensure_percentile_cache, parse_sandai_ketto
+from app.services.race_condition_score import calc_race_condition_score, ensure_condition_cache
 
 router = APIRouter(prefix="/api/v1/score", tags=["Scoring"])
 
@@ -129,7 +130,8 @@ async def get_score(race_id: str, db: AsyncSession = Depends(get_db)):
     # レース情報を取得
     race_result = await db.execute(
         text(
-            "SELECT kyoso_mei_hondai, kyoso_mei_ryakusho10, kyori, track_code "
+            "SELECT kyoso_mei_hondai, kyoso_mei_ryakusho10, kyori, track_code, "
+            "  shiba_baba_jotai_code, dirt_baba_jotai_code "
             "FROM jvd_race "
             "WHERE kaisai_nen = :kaisai_nen AND kaisai_tsukihi = :kaisai_tsukihi "
             "  AND keibajo_code = :keibajo_code AND kaisai_kai = :kaisai_kai "
@@ -142,6 +144,10 @@ async def get_score(race_id: str, db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=404, detail="レースが見つかりません")
 
     race_name = (race[0] or race[1] or "").strip()
+    race_kyori = race[2] or ""
+    race_track_code = race[3] or ""
+    race_shiba_baba = race[4] or ""
+    race_dirt_baba = race[5] or ""
 
     # 出走馬一覧を取得（JOINで sandai_ketto も一括取得 — N+1回避）
     uma_result = await db.execute(
@@ -163,13 +169,28 @@ async def get_score(race_id: str, db: AsyncSession = Depends(get_db)):
 
     # パーセンタイルキャッシュを事前構築（ループ内での遅延初期化を回避）
     await ensure_percentile_cache(db)
+    await ensure_condition_cache(db)
 
     # 各出走馬の血統スコアを計算
     predictions = []
     for uma in umas:
         umaban, bamei, ketto_bango, odds_str, ninki_str, sandai_ketto = uma
 
-        bloodline = calc_bloodline_score(sandai_ketto)
+        sire_bango, bms_bango = parse_sandai_ketto(sandai_ketto)
+        bloodline = calc_bloodline_score(sire_bango, bms_bango)
+
+        # カテゴリB: レース条件スコア
+        condition = calc_race_condition_score(
+            sire_bango=sire_bango,
+            bms_bango=bms_bango,
+            track_code=race_track_code,
+            kyori=race_kyori,
+            keibajo_code=pk["keibajo_code"],
+            shiba_baba_jotai_code=race_shiba_baba,
+            dirt_baba_jotai_code=race_dirt_baba,
+        )
+
+        total_score = round(bloodline["total"] + condition["total"], 1)
 
         predictions.append(
             PredictionItem(
@@ -178,7 +199,7 @@ async def get_score(race_id: str, db: AsyncSession = Depends(get_db)):
                 ketto_toroku_bango=ketto_bango or "",
                 odds=parse_odds(odds_str),
                 popularity=safe_int(ninki_str),
-                total_score=bloodline["total"],
+                total_score=total_score,
                 category_scores={
                     "A": CategoryDetail(
                         total=bloodline["total"],
@@ -190,7 +211,15 @@ async def get_score(race_id: str, db: AsyncSession = Depends(get_db)):
                             "A5": bloodline["A5"],
                         },
                     ),
-                    "B": CategoryDetail(total=0, details={}),
+                    "B": CategoryDetail(
+                        total=condition["total"],
+                        details={
+                            "B1": condition["B1"],
+                            "B2": condition["B2"],
+                            "B3": condition["B3"],
+                            "B4": condition["B4"],
+                        },
+                    ),
                     "C": CategoryDetail(total=0, details={}),
                     "D": CategoryDetail(total=0, details={}),
                     "E": CategoryDetail(total=0, details={}),
