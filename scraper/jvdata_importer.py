@@ -16,6 +16,7 @@ jvdata_parser でパースした辞書データを backend/jvdata_schema.sql の
 """
 
 import argparse
+import json
 import logging
 import os
 import sqlite3
@@ -145,7 +146,7 @@ class JVDataImporter:
                 bamei = rec.get(f"ketto_bamei_{i:02d}", "")
                 sandai.append({"hanshoku_toroku_bango": bango, "bamei": bamei})
             data = self._filter_columns(rec, columns)
-            data["sandai_ketto"] = str(sandai)  # JSON文字列として格納
+            data["sandai_ketto"] = json.dumps(sandai, ensure_ascii=False)
 
             # 着回数をJSON化
             for prefix_group, json_col in [
@@ -157,7 +158,7 @@ class JVDataImporter:
                     for suffix in ["_1chaku", "_2chaku", "_3chaku", "_4chaku", "_5chaku", "_chakugai"]:
                         key = f"{prefix}{suffix}"
                         vals.append(rec.get(key, "0"))
-                data[json_col] = str(vals)
+                data[json_col] = json.dumps(vals, ensure_ascii=False)
 
             self._upsert("jvd_uma", data)
             count += 1
@@ -190,7 +191,7 @@ class JVDataImporter:
                 bango = rec.get(f"sandai_hanshoku_{i:02d}", "")
                 sandai.append(bango)
             data = self._filter_columns(rec, columns)
-            data["sandai_ketto_hanshoku"] = str(sandai)
+            data["sandai_ketto_hanshoku"] = json.dumps(sandai, ensure_ascii=False)
             self._upsert("jvd_sanku", data)
             count += 1
         self.conn.commit()
@@ -244,7 +245,7 @@ class JVDataImporter:
                 # chaku_gai は6番目
                 entry["chakukaisu"][5] = rec.get(f"seiseki_{i}_chaku_gai", "0")
                 seiseki.append(entry)
-            data["seiseki"] = str(seiseki)
+            data["seiseki"] = json.dumps(seiseki, ensure_ascii=False)
             self._upsert("jvd_seisansha", data)
             count += 1
         self.conn.commit()
@@ -271,7 +272,7 @@ class JVDataImporter:
                 }
                 entry["chakukaisu"][5] = rec.get(f"seiseki_{i}_chaku_gai", "0")
                 seiseki.append(entry)
-            data["seiseki"] = str(seiseki)
+            data["seiseki"] = json.dumps(seiseki, ensure_ascii=False)
             self._upsert("jvd_banushi", data)
             count += 1
         self.conn.commit()
@@ -308,7 +309,7 @@ class JVDataImporter:
                             "haraimodoshi_kin": kin,
                             "ninki": ninki,
                         })
-                data[kenshu] = str(entries) if entries else None
+                data[kenshu] = json.dumps(entries, ensure_ascii=False) if entries else None
             self._upsert("jvd_haraimodoshi", data)
             count += 1
         self.conn.commit()
@@ -576,7 +577,7 @@ def main():
     parser.add_argument("--skip-masters", action="store_true",
                         help="マスタデータ（HN/KS/CH/BR/BN）インポートをスキップ")
     parser.add_argument("--masters-only", action="store_true",
-                        help="マスタデータ（KS/CH/BR/BN）のみインポート（年別データはスキップ）")
+                        help="マスタデータ（HN/KS/CH/BR/BN）をインポート（年別データはスキップ、--skip-hnでHN除外）")
     parser.add_argument("--db", type=str, default=DB_PATH, help="SQLiteデータベースパス")
     parser.add_argument("--log-file", type=str, default=default_log, help="ログファイルパス")
 
@@ -585,6 +586,10 @@ def main():
     # バリデーション
     if args.all_years and (args.start_year or args.end_year):
         parser.error("--all-years と --start-year/--end-year は同時指定できません")
+    if args.masters_only and (args.year or args.all_years or args.start_year or args.end_year):
+        parser.error("--masters-only と年指定オプション（--year/--all-years/--start-year/--end-year）は同時指定できません")
+    if args.masters_only and args.skip_masters:
+        parser.error("--masters-only と --skip-masters は同時指定できません")
 
     # ロギング初期化
     logger = setup_logging(args.log_file)
