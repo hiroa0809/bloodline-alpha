@@ -266,7 +266,7 @@ def _calc_inbreed_score(
     coi = 0.0
     inbreed_info = []
 
-    for bango in common:
+    for bango in sorted(common):
         # 馬名を取得（父方の最初のエントリから）
         first_sire_idx = sire_side[bango][0][0]
         bamei = (sandai_ketto_list[first_sire_idx].get("bamei") or "").strip()
@@ -374,6 +374,8 @@ def calc_bloodline_score(
     """
     if not _percentile_cache:
         logger.warning("パーセンタイルキャッシュが未初期化です。ensure_percentile_cache()を呼んでください。")
+    if not _nicks_cache:
+        logger.warning("ニックスキャッシュが未初期化です。ensure_nicks_cache()を呼んでください。")
 
     # A1: 父成績
     a1_score, sire_info = _calc_sub_score("sire", sire_bango, DEFAULT_WEIGHTS["A1"])
