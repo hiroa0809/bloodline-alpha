@@ -229,8 +229,8 @@ def main() -> None:
         logger.info("=== 集計結果サマリー ===")
         logger.info(f"合計: {total:,} 組合せ")
         summary = conn.execute(f"""
-            SELECT COUNT(*), SUM(starts), SUM(wins),
-                   ROUND(AVG(win_rate), 4), ROUND(AVG(tansho_roi), 4)
+            SELECT COUNT(*), COALESCE(SUM(starts), 0), COALESCE(SUM(wins), 0),
+                   COALESCE(ROUND(AVG(win_rate), 4), 0), COALESCE(ROUND(AVG(tansho_roi), 4), 0)
             FROM {WORK_TABLE}
             WHERE starts >= 3
         """).fetchone()

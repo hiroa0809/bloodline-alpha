@@ -227,8 +227,9 @@ def _calc_inbreed_score(
 ) -> tuple[float, float, list[dict]]:
     """
     A4: sandai_ketto（14頭）からインブリードを検出しスコアを返す。
-    Wright's COI: 各共通祖先の寄与 = (1/2)^(n+m+1)
-    n = 父方での世代数, m = 母方での世代数
+    Wright's COI: 各共通祖先の寄与 = (1/2)^(n1+n2+1)
+    n1 = 父から共通祖先までの世代数, n2 = 母から共通祖先までの世代数
+    _IDX_TO_GEN は馬自身から数えた世代数なので、親からの距離は gen-1。
 
     返却: (スコア, coi値, インブリード情報リスト)
     """
@@ -271,10 +272,12 @@ def _calc_inbreed_score(
         bamei = (sandai_ketto_list[first_sire_idx].get("bamei") or "").strip()
 
         # この祖先の個別COI寄与を合算
+        # Wright's COI: (1/2)^(n1+n2+1)  n1,n2 = 親から共通祖先までの世代数
+        # _IDX_TO_GEN は馬自身基準なので、親からの距離 = gen - 1
         ancestor_contribution = 0.0
         for _s_idx, s_gen in sire_side[bango]:
             for _d_idx, d_gen in dam_side[bango]:
-                ancestor_contribution += 0.5 ** (s_gen + d_gen + 1)
+                ancestor_contribution += 0.5 ** ((s_gen - 1) + (d_gen - 1) + 1)
         coi += ancestor_contribution
 
         # クロス表記を生成（例: "2×3"）

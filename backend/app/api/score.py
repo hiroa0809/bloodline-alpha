@@ -184,8 +184,12 @@ async def get_score(race_id: str, db: AsyncSession = Depends(get_db)):
 
         ketto_list = parse_sandai_ketto_full(sandai_ketto)
         if ketto_list:
-            sire_bango = (ketto_list[0].get("hanshoku_toroku_bango") or "").strip() or None
-            bms_bango = (ketto_list[4].get("hanshoku_toroku_bango") or "").strip() or None if len(ketto_list) > 4 else None
+            entry0 = ketto_list[0] if isinstance(ketto_list[0], dict) else {}
+            sire_bango = (entry0.get("hanshoku_toroku_bango") or "").strip() or None
+            if len(ketto_list) > 4 and isinstance(ketto_list[4], dict):
+                bms_bango = (ketto_list[4].get("hanshoku_toroku_bango") or "").strip() or None
+            else:
+                bms_bango = None
         else:
             sire_bango, bms_bango = None, None
         bloodline = calc_bloodline_score(sire_bango, bms_bango, ketto_list)
