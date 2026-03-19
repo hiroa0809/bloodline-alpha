@@ -270,11 +270,12 @@ def _calc_inbreed_score(
         first_sire_idx = sire_side[bango][0][0]
         bamei = (sandai_ketto_list[first_sire_idx].get("bamei") or "").strip()
 
-        # 全ペアのCOI寄与を合算
+        # この祖先の個別COI寄与を合算
+        ancestor_contribution = 0.0
         for _s_idx, s_gen in sire_side[bango]:
             for _d_idx, d_gen in dam_side[bango]:
-                contribution = 0.5 ** (s_gen + d_gen + 1)
-                coi += contribution
+                ancestor_contribution += 0.5 ** (s_gen + d_gen + 1)
+        coi += ancestor_contribution
 
         # クロス表記を生成（例: "2×3"）
         s_gens = sorted(set(g for _, g in sire_side[bango]))
@@ -285,7 +286,7 @@ def _calc_inbreed_score(
             "bamei": bamei,
             "hanshoku_bango": bango,
             "cross": cross,
-            "coi_contribution": round(coi, 6),
+            "coi_contribution": round(ancestor_contribution, 6),
         })
 
     # COI → スコア変換（線形クリップ: 0〜_COI_NORMALIZE_MAX → 0〜1）

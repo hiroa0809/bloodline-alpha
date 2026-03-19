@@ -160,7 +160,7 @@ def aggregate_nicks_stats(conn: sqlite3.Connection) -> int:
                 END)
                 / (COUNT(*) * 100.0)
             AS REAL) AS tansho_roi,
-            '{now}'
+            ?
         FROM _tmp_uma_sire m
         JOIN jvd_race_uma ru ON m.ketto_toroku_bango = ru.ketto_toroku_bango
         WHERE m.sire_bango IS NOT NULL AND m.sire_bango != ''
@@ -172,7 +172,7 @@ def aggregate_nicks_stats(conn: sqlite3.Connection) -> int:
         GROUP BY m.sire_bango, m.bms_bango
     """
 
-    cursor = conn.execute(sql)
+    cursor = conn.execute(sql, (now,))
     conn.commit()
     count = cursor.rowcount
     logger.info(f"ニックス集計完了: {count:,} 組合せ")

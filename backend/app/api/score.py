@@ -17,7 +17,6 @@ from app.services.bloodline_score import (
     calc_bloodline_score,
     ensure_nicks_cache,
     ensure_percentile_cache,
-    parse_sandai_ketto,
     parse_sandai_ketto_full,
 )
 from app.services.race_condition_score import calc_race_condition_score, ensure_condition_cache
@@ -183,8 +182,12 @@ async def get_score(race_id: str, db: AsyncSession = Depends(get_db)):
     for uma in umas:
         umaban, bamei, ketto_bango, odds_str, ninki_str, sandai_ketto = uma
 
-        sire_bango, bms_bango = parse_sandai_ketto(sandai_ketto)
         ketto_list = parse_sandai_ketto_full(sandai_ketto)
+        if ketto_list:
+            sire_bango = (ketto_list[0].get("hanshoku_toroku_bango") or "").strip() or None
+            bms_bango = (ketto_list[4].get("hanshoku_toroku_bango") or "").strip() or None if len(ketto_list) > 4 else None
+        else:
+            sire_bango, bms_bango = None, None
         bloodline = calc_bloodline_score(sire_bango, bms_bango, ketto_list)
 
         # カテゴリB: レース条件スコア
