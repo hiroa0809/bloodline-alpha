@@ -382,8 +382,17 @@ def calc_bloodline_score(
     # A3: ニックス
     a3_score, nicks_info = _calc_nicks_score(sire_bango, bms_bango, DEFAULT_WEIGHTS["A3"])
     # A4: インブリード / A5: アウトブリード（排他）
-    a4_score, coi, inbreed_info = _calc_inbreed_score(sandai_ketto_list, DEFAULT_WEIGHTS["A4"])
-    a5_score = DEFAULT_WEIGHTS["A5"] if (sandai_ketto_list and coi == 0.0) else 0.0
+    # 14頭分のdict揃いを検証し、不完全データはA4/A5ともに0点
+    valid_sandai = None
+    if sandai_ketto_list and len(sandai_ketto_list) >= 14:
+        first_14 = sandai_ketto_list[:14]
+        if all(
+            isinstance(e, dict) and (e.get("hanshoku_toroku_bango") or "").strip()
+            for e in first_14
+        ):
+            valid_sandai = first_14
+    a4_score, coi, inbreed_info = _calc_inbreed_score(valid_sandai, DEFAULT_WEIGHTS["A4"])
+    a5_score = DEFAULT_WEIGHTS["A5"] if (valid_sandai and coi == 0.0) else 0.0
 
     total = round(a1_score + a2_score + a3_score + a4_score + a5_score, 1)
 
