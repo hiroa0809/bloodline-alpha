@@ -491,6 +491,24 @@ CREATE TABLE IF NOT EXISTS sire_condition_stats (
 );
 
 -- ============================================================
+-- 集計テーブル: 父×母父(BMS)ニックス成績
+-- スコアリングエンジン カテゴリA (A3:ニックス) の土台
+-- ============================================================
+CREATE TABLE IF NOT EXISTS nicks_stats (
+    sire_bango      TEXT NOT NULL,       -- 父の繁殖登録番号
+    bms_bango       TEXT NOT NULL,       -- 母父(BMS)の繁殖登録番号
+    sire_bamei      TEXT,                -- 父馬名
+    bms_bamei       TEXT,                -- 母父馬名
+    runners         INTEGER DEFAULT 0,   -- 出走頭数（ユニーク産駒数）
+    starts          INTEGER DEFAULT 0,   -- 延べ出走回数
+    wins            INTEGER DEFAULT 0,   -- 1着回数
+    win_rate        REAL DEFAULT 0,      -- 勝率 (wins / starts)
+    tansho_roi      REAL DEFAULT 0,      -- 単勝回収率
+    updated_at      TEXT,                -- 最終更新日時 (ISO 8601)
+    PRIMARY KEY (sire_bango, bms_bango)
+);
+
+-- ============================================================
 -- インデックス
 -- ============================================================
 
