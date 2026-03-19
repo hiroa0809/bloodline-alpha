@@ -13,7 +13,12 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.services.bloodline_score import calc_bloodline_score, ensure_percentile_cache, parse_sandai_ketto
+from app.services.bloodline_score import (
+    calc_bloodline_score,
+    ensure_nicks_cache,
+    ensure_percentile_cache,
+    parse_sandai_ketto_full,
+)
 from app.services.race_condition_score import calc_race_condition_score, ensure_condition_cache
 
 router = APIRouter(prefix="/api/v1/score", tags=["Scoring"])
@@ -167,8 +172,9 @@ async def get_score(race_id: str, db: AsyncSession = Depends(get_db)):
     if not umas:
         raise HTTPException(status_code=404, detail="出走馬が見つかりません")
 
-    # パーセンタイルキャッシュを事前構築（ループ内での遅延初期化を回避）
+    # キャッシュを事前構築（ループ内での遅延初期化を回避）
     await ensure_percentile_cache(db)
+    await ensure_nicks_cache(db)
     await ensure_condition_cache(db)
 
     # 各出走馬の血統スコアを計算
@@ -176,8 +182,17 @@ async def get_score(race_id: str, db: AsyncSession = Depends(get_db)):
     for uma in umas:
         umaban, bamei, ketto_bango, odds_str, ninki_str, sandai_ketto = uma
 
-        sire_bango, bms_bango = parse_sandai_ketto(sandai_ketto)
-        bloodline = calc_bloodline_score(sire_bango, bms_bango)
+        ketto_list = parse_sandai_ketto_full(sandai_ketto)
+        if ketto_list:
+            entry0 = ketto_list[0] if isinstance(ketto_list[0], dict) else {}
+            sire_bango = (entry0.get("hanshoku_toroku_bango") or "").strip() or None
+            if len(ketto_list) > 4 and isinstance(ketto_list[4], dict):
+                bms_bango = (ketto_list[4].get("hanshoku_toroku_bango") or "").strip() or None
+            else:
+                bms_bango = None
+        else:
+            sire_bango, bms_bango = None, None
+        bloodline = calc_bloodline_score(sire_bango, bms_bango, ketto_list)
 
         # カテゴリB: レース条件スコア
         condition = calc_race_condition_score(
