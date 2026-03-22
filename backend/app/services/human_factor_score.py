@@ -115,7 +115,8 @@ async def refresh_human_factor_cache(db: AsyncSession) -> None:
     """キャッシュを強制再構築する（バッチ実行後に呼ぶ）"""
     global _human_factor_cache
     async with _human_factor_cache_lock:
-        _human_factor_cache = await _build_human_factor_cache(db)
+        result = await _build_human_factor_cache(db)
+        _human_factor_cache = result if result is not None else {}
 
 
 # --- スコア計算 ---
