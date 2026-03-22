@@ -42,8 +42,22 @@ def _percentile_rank(sorted_values: list[float], value: float) -> float:
 
 # --- キャッシュ構築 ---
 
-async def _build_human_factor_cache(db: AsyncSession) -> dict:
-    """human_factor_stats から role 別にパーセンタイルキャッシュを構築"""
+async def _build_human_factor_cache(db: AsyncSession) -> dict | None:
+    """human_factor_stats から role 別にパーセンタイルキャッシュを構築。
+    テーブル未作成時は None を返す（カテゴリCのみ無効化）。
+    """
+    # テーブル存在チェック
+    check = await db.execute(
+        text("SELECT name FROM sqlite_master WHERE type='table' AND name='human_factor_stats'")
+    )
+    if not check.fetchone():
+        logger.warning(
+            "human_factor_stats テーブルが存在しません。"
+            "カテゴリCは0点で計算されます。"
+            "python backend/batch/calc_human_factor_stats.py を実行してください。"
+        )
+        return None
+
     new_cache = {}
 
     for role in ("jockey", "trainer", "owner", "breeder"):
@@ -84,13 +98,17 @@ async def _build_human_factor_cache(db: AsyncSession) -> dict:
 
 
 async def ensure_human_factor_cache(db: AsyncSession) -> None:
-    """キャッシュが空なら構築する。呼び出し元でループ前に1回呼ぶ。"""
+    """キャッシュが空なら構築する。呼び出し元でループ前に1回呼ぶ。
+    テーブル未作成時はキャッシュを空dictのままにし、カテゴリCは0点で計算される。
+    """
     global _human_factor_cache
     if _human_factor_cache:
         return
     async with _human_factor_cache_lock:
         if not _human_factor_cache:
-            _human_factor_cache = await _build_human_factor_cache(db)
+            result = await _build_human_factor_cache(db)
+            if result is not None:
+                _human_factor_cache = result
 
 
 async def refresh_human_factor_cache(db: AsyncSession) -> None:
@@ -131,27 +149,33 @@ def calc_human_factor_score(
     kishu_code: str | None,
     banushi_code: str | None,
     seisansha_code: str | None,
+    weights: dict[str, float] | None = None,
 ) -> dict:
     """
     1頭分のカテゴリCスコアを計算して返す。
     DBアクセスなし — キャッシュのみで計算。
     事前に ensure_human_factor_cache() を呼んでおくこと。
 
+    weights: {"C1": float, "C2": float, "C3": float} — 省略時はDEFAULT_WEIGHTSを使用。
+             新馬戦/未勝利以上でレースプロファイルに応じた配点を渡す。
+
     返却例:
     {"C1": 3.2, "C2": 3.8, "C3": 1.5, "total": 8.5}
     """
+    w = weights if weights is not None else DEFAULT_WEIGHTS
+
     if not _human_factor_cache:
         logger.warning("人的要素キャッシュが未初期化です。ensure_human_factor_cache()を呼んでください。")
 
     # C1: 調教師
-    c1 = _calc_person_score("trainer", chokyoshi_code, DEFAULT_WEIGHTS["C1"])
+    c1 = _calc_person_score("trainer", chokyoshi_code, w["C1"])
 
     # C2: 騎手
-    c2 = _calc_person_score("jockey", kishu_code, DEFAULT_WEIGHTS["C2"])
+    c2 = _calc_person_score("jockey", kishu_code, w["C2"])
 
     # C3: 馬主/生産者（50:50 で合算）
     # 配点の半分ずつを馬主・生産者に割り当て
-    c3_weight_each = DEFAULT_WEIGHTS["C3"] / 2.0
+    c3_weight_each = w["C3"] / 2.0
     c3_owner = _calc_person_score("owner", banushi_code, c3_weight_each)
     c3_breeder = _calc_person_score("breeder", seisansha_code, c3_weight_each)
     c3 = round(c3_owner + c3_breeder, 1)

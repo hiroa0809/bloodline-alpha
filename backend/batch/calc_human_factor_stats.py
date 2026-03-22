@@ -5,6 +5,9 @@ jvd_race_uma から騎手・調教師・馬主の成績を直接集計し、
 生産者は jvd_uma と JOIN して成績を集計する。
 結果は human_factor_stats テーブルに格納。
 
+ワークテーブル (human_factor_stats_new) に全件書き込み後、
+アトミックにRENAMEすることで集計中の不完全データ公開を防ぐ。
+
 使い方:
     python backend/batch/calc_human_factor_stats.py
 """
@@ -28,15 +31,17 @@ logger = logging.getLogger(__name__)
 
 DB_PATH = Path(__file__).resolve().parent.parent / "bloodline.db"
 
+WORK_TABLE = "human_factor_stats_new"
+
 # 出走回数の最低閾値（これ未満はノイズとして除外）
 _MIN_STARTS_FILTER = 0  # 集計時は全件INSERT、スコア計算時にフィルタする
 
 
-def create_table(conn: sqlite3.Connection) -> None:
-    """human_factor_stats テーブルを再作成（全データ再集計）"""
-    conn.execute("DROP TABLE IF EXISTS human_factor_stats")
-    conn.execute("""
-        CREATE TABLE human_factor_stats (
+def create_work_table(conn: sqlite3.Connection) -> None:
+    """ワークテーブルを作成（既存があれば再作成）"""
+    conn.execute(f"DROP TABLE IF EXISTS {WORK_TABLE}")
+    conn.execute(f"""
+        CREATE TABLE {WORK_TABLE} (
             person_code     TEXT NOT NULL,
             role            TEXT NOT NULL,
             person_name     TEXT,
@@ -84,7 +89,7 @@ def aggregate_jockey(conn: sqlite3.Connection, now: str) -> int:
     """騎手（jockey）の成績を集計"""
     logger.info("集計中: role=jockey（騎手）")
     sql = f"""
-        INSERT INTO human_factor_stats
+        INSERT INTO {WORK_TABLE}
             (person_code, role, person_name, starts, wins, second, third,
              win_rate, rentai_rate, fukusho_rate, tansho_roi, updated_at)
         SELECT
@@ -109,7 +114,6 @@ def aggregate_jockey(conn: sqlite3.Connection, now: str) -> int:
         GROUP BY ru.kishu_code
     """
     cursor = conn.execute(sql)
-    conn.commit()
     count = cursor.rowcount
     logger.info(f"集計完了: role=jockey, {count:,} 名")
     return count
@@ -119,7 +123,7 @@ def aggregate_trainer(conn: sqlite3.Connection, now: str) -> int:
     """調教師（trainer）の成績を集計"""
     logger.info("集計中: role=trainer（調教師）")
     sql = f"""
-        INSERT INTO human_factor_stats
+        INSERT INTO {WORK_TABLE}
             (person_code, role, person_name, starts, wins, second, third,
              win_rate, rentai_rate, fukusho_rate, tansho_roi, updated_at)
         SELECT
@@ -144,7 +148,6 @@ def aggregate_trainer(conn: sqlite3.Connection, now: str) -> int:
         GROUP BY ru.chokyoshi_code
     """
     cursor = conn.execute(sql)
-    conn.commit()
     count = cursor.rowcount
     logger.info(f"集計完了: role=trainer, {count:,} 名")
     return count
@@ -154,7 +157,7 @@ def aggregate_owner(conn: sqlite3.Connection, now: str) -> int:
     """馬主（owner）の成績を集計"""
     logger.info("集計中: role=owner（馬主）")
     sql = f"""
-        INSERT INTO human_factor_stats
+        INSERT INTO {WORK_TABLE}
             (person_code, role, person_name, starts, wins, second, third,
              win_rate, rentai_rate, fukusho_rate, tansho_roi, updated_at)
         SELECT
@@ -179,7 +182,6 @@ def aggregate_owner(conn: sqlite3.Connection, now: str) -> int:
         GROUP BY ru.banushi_code
     """
     cursor = conn.execute(sql)
-    conn.commit()
     count = cursor.rowcount
     logger.info(f"集計完了: role=owner, {count:,} 名/社")
     return count
@@ -189,7 +191,7 @@ def aggregate_breeder(conn: sqlite3.Connection, now: str) -> int:
     """生産者（breeder）の成績を集計（jvd_uma JOIN）"""
     logger.info("集計中: role=breeder（生産者）")
     sql = f"""
-        INSERT INTO human_factor_stats
+        INSERT INTO {WORK_TABLE}
             (person_code, role, person_name, starts, wins, second, third,
              win_rate, rentai_rate, fukusho_rate, tansho_roi, updated_at)
         SELECT
@@ -215,7 +217,6 @@ def aggregate_breeder(conn: sqlite3.Connection, now: str) -> int:
         GROUP BY u.seisansha_code
     """
     cursor = conn.execute(sql)
-    conn.commit()
     count = cursor.rowcount
     logger.info(f"集計完了: role=breeder, {count:,} 社")
     return count
@@ -234,13 +235,19 @@ def main() -> None:
     start = time.time()
 
     try:
-        create_table(conn)
+        create_work_table(conn)
         now = datetime.now(timezone.utc).isoformat()
 
         aggregate_jockey(conn, now)
         aggregate_trainer(conn, now)
         aggregate_owner(conn, now)
         aggregate_breeder(conn, now)
+
+        # ワークテーブル → 本テーブルにアトミックswap
+        conn.execute("DROP TABLE IF EXISTS human_factor_stats")
+        conn.execute(f"ALTER TABLE {WORK_TABLE} RENAME TO human_factor_stats")
+        conn.commit()
+        logger.info("テーブル swap 完了: human_factor_stats_new → human_factor_stats")
 
         # 結果サマリー
         rows = conn.execute(
@@ -251,6 +258,11 @@ def main() -> None:
         for r in rows:
             logger.info(f"  {r[0]}: {r[1]:,} 名/社, 延べ {r[2]:,} 走, {r[3]:,} 勝")
 
+    except Exception:
+        # 失敗時はワークテーブルを掃除
+        conn.execute(f"DROP TABLE IF EXISTS {WORK_TABLE}")
+        conn.commit()
+        raise
     finally:
         conn.close()
 
