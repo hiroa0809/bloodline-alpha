@@ -24,6 +24,7 @@ DEFAULT_WEIGHTS = {
 # キャッシュ（サーバー起動中は保持）
 # 構造: {role: {"win_rates": [...], "rois": [...], "lookup": {code: {name, win_rate, roi}}}}
 _human_factor_cache: dict = {}
+_human_factor_cache_initialized = False
 _human_factor_cache_lock = asyncio.Lock()
 
 # 最低出走数閾値（これ未満はスコア対象外）
@@ -101,22 +102,23 @@ async def ensure_human_factor_cache(db: AsyncSession) -> None:
     """キャッシュが空なら構築する。呼び出し元でループ前に1回呼ぶ。
     テーブル未作成時はキャッシュを空dictのままにし、カテゴリCは0点で計算される。
     """
-    global _human_factor_cache
-    if _human_factor_cache:
+    global _human_factor_cache, _human_factor_cache_initialized
+    if _human_factor_cache_initialized:
         return
     async with _human_factor_cache_lock:
-        if not _human_factor_cache:
+        if not _human_factor_cache_initialized:
             result = await _build_human_factor_cache(db)
-            if result is not None:
-                _human_factor_cache = result
+            _human_factor_cache = result if result is not None else {}
+            _human_factor_cache_initialized = True
 
 
 async def refresh_human_factor_cache(db: AsyncSession) -> None:
     """キャッシュを強制再構築する（バッチ実行後に呼ぶ）"""
-    global _human_factor_cache
+    global _human_factor_cache, _human_factor_cache_initialized
     async with _human_factor_cache_lock:
         result = await _build_human_factor_cache(db)
         _human_factor_cache = result if result is not None else {}
+        _human_factor_cache_initialized = True
 
 
 # --- スコア計算 ---
@@ -163,7 +165,7 @@ def calc_human_factor_score(
     返却例:
     {"C1": 3.2, "C2": 3.8, "C3": 1.5, "total": 8.5}
     """
-    w = weights if weights is not None else DEFAULT_WEIGHTS
+    w = {**DEFAULT_WEIGHTS, **(weights or {})}
 
     if not _human_factor_cache:
         logger.warning("人的要素キャッシュが未初期化です。ensure_human_factor_cache()を呼んでください。")
