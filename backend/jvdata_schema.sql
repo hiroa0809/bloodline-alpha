@@ -509,6 +509,26 @@ CREATE TABLE IF NOT EXISTS nicks_stats (
 );
 
 -- ============================================================
+-- 集計テーブル: 人的要素（騎手・調教師・馬主・生産者）別成績
+-- スコアリングエンジン カテゴリC (C1:調教師, C2:騎手, C3:馬主/生産者) の土台
+-- ============================================================
+CREATE TABLE IF NOT EXISTS human_factor_stats (
+    person_code     TEXT NOT NULL,       -- 人物コード（騎手/調教師/馬主/生産者）
+    role            TEXT NOT NULL,       -- 'jockey' / 'trainer' / 'owner' / 'breeder'
+    person_name     TEXT,                -- 名前
+    starts          INTEGER DEFAULT 0,   -- 延べ出走回数
+    wins            INTEGER DEFAULT 0,   -- 1着回数
+    second          INTEGER DEFAULT 0,   -- 2着回数
+    third           INTEGER DEFAULT 0,   -- 3着回数
+    win_rate        REAL DEFAULT 0,      -- 勝率 (wins / starts)
+    rentai_rate     REAL DEFAULT 0,      -- 連対率 ((wins + second) / starts)
+    fukusho_rate    REAL DEFAULT 0,      -- 複勝率 ((wins + second + third) / starts)
+    tansho_roi      REAL DEFAULT 0,      -- 単勝回収率
+    updated_at      TEXT,                -- 最終更新日時 (ISO 8601)
+    PRIMARY KEY (person_code, role)
+);
+
+-- ============================================================
 -- インデックス
 -- ============================================================
 

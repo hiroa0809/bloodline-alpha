@@ -20,6 +20,7 @@ from app.services.bloodline_score import (
     parse_sandai_ketto_full,
 )
 from app.services.race_condition_score import calc_race_condition_score, ensure_condition_cache
+from app.services.human_factor_score import calc_human_factor_score, ensure_human_factor_cache
 
 router = APIRouter(prefix="/api/v1/score", tags=["Scoring"])
 
@@ -108,17 +109,17 @@ async def get_mock_score(race_id: str):
             PredictionItem(
                 horse_number=1, horse_name="リアルスティール産駒", ketto_toroku_bango="0000000000",
                 odds=5.5, popularity=3, total_score=85,
-                category_scores={"A": CategoryDetail(total=55, details={"A1": 35, "A2": 20}), "B": CategoryDetail(total=18, details={}), "C": CategoryDetail(total=12, details={}), "D": CategoryDetail(total=0, details={}), "E": CategoryDetail(total=0, details={})},
+                category_scores={"A": CategoryDetail(total=55, details={"A1": 35, "A2": 20}), "B": CategoryDetail(total=18, details={}), "C": CategoryDetail(total=12, details={"C1": 5, "C2": 5, "C3": 2}), "D": CategoryDetail(total=0, details={}), "E": CategoryDetail(total=0, details={})},
             ),
             PredictionItem(
                 horse_number=2, horse_name="過剰人気馬", ketto_toroku_bango="0000000001",
                 odds=1.8, popularity=1, total_score=45,
-                category_scores={"A": CategoryDetail(total=20, details={"A1": 12, "A2": 8}), "B": CategoryDetail(total=15, details={}), "C": CategoryDetail(total=10, details={}), "D": CategoryDetail(total=0, details={}), "E": CategoryDetail(total=0, details={})},
+                category_scores={"A": CategoryDetail(total=20, details={"A1": 12, "A2": 8}), "B": CategoryDetail(total=15, details={}), "C": CategoryDetail(total=10, details={"C1": 4, "C2": 4, "C3": 2}), "D": CategoryDetail(total=0, details={}), "E": CategoryDetail(total=0, details={})},
             ),
             PredictionItem(
                 horse_number=3, horse_name="穴馬", ketto_toroku_bango="0000000002",
                 odds=25.0, popularity=8, total_score=75,
-                category_scores={"A": CategoryDetail(total=50, details={"A1": 30, "A2": 20}), "B": CategoryDetail(total=15, details={}), "C": CategoryDetail(total=10, details={}), "D": CategoryDetail(total=0, details={}), "E": CategoryDetail(total=0, details={})},
+                category_scores={"A": CategoryDetail(total=50, details={"A1": 30, "A2": 20}), "B": CategoryDetail(total=15, details={}), "C": CategoryDetail(total=10, details={"C1": 4, "C2": 4, "C3": 2}), "D": CategoryDetail(total=0, details={}), "E": CategoryDetail(total=0, details={})},
             ),
         ],
     )
@@ -154,11 +155,12 @@ async def get_score(race_id: str, db: AsyncSession = Depends(get_db)):
     race_shiba_baba = race[4] or ""
     race_dirt_baba = race[5] or ""
 
-    # 出走馬一覧を取得（JOINで sandai_ketto も一括取得 — N+1回避）
+    # 出走馬一覧を取得（JOINで sandai_ketto, seisansha_code も一括取得 — N+1回避）
     uma_result = await db.execute(
         text(
             "SELECT ru.umaban, ru.bamei, ru.ketto_toroku_bango, "
-            "  ru.tansho_odds, ru.tansho_ninki_jun, u.sandai_ketto "
+            "  ru.tansho_odds, ru.tansho_ninki_jun, u.sandai_ketto, "
+            "  ru.chokyoshi_code, ru.kishu_code, ru.banushi_code, u.seisansha_code "
             "FROM jvd_race_uma ru "
             "LEFT JOIN jvd_uma u ON ru.ketto_toroku_bango = u.ketto_toroku_bango "
             "WHERE ru.kaisai_nen = :kaisai_nen AND ru.kaisai_tsukihi = :kaisai_tsukihi "
@@ -176,11 +178,13 @@ async def get_score(race_id: str, db: AsyncSession = Depends(get_db)):
     await ensure_percentile_cache(db)
     await ensure_nicks_cache(db)
     await ensure_condition_cache(db)
+    await ensure_human_factor_cache(db)
 
     # 各出走馬の血統スコアを計算
     predictions = []
     for uma in umas:
-        umaban, bamei, ketto_bango, odds_str, ninki_str, sandai_ketto = uma
+        (umaban, bamei, ketto_bango, odds_str, ninki_str, sandai_ketto,
+         chokyoshi_code, kishu_code, banushi_code, seisansha_code) = uma
 
         ketto_list = parse_sandai_ketto_full(sandai_ketto)
         if ketto_list:
@@ -205,7 +209,15 @@ async def get_score(race_id: str, db: AsyncSession = Depends(get_db)):
             dirt_baba_jotai_code=race_dirt_baba,
         )
 
-        total_score = round(bloodline["total"] + condition["total"], 1)
+        # カテゴリC: 人的要素スコア
+        human = calc_human_factor_score(
+            chokyoshi_code=(chokyoshi_code or "").strip() or None,
+            kishu_code=(kishu_code or "").strip() or None,
+            banushi_code=(banushi_code or "").strip() or None,
+            seisansha_code=(seisansha_code or "").strip() or None,
+        )
+
+        total_score = round(bloodline["total"] + condition["total"] + human["total"], 1)
 
         predictions.append(
             PredictionItem(
@@ -235,7 +247,14 @@ async def get_score(race_id: str, db: AsyncSession = Depends(get_db)):
                             "B4": condition["B4"],
                         },
                     ),
-                    "C": CategoryDetail(total=0, details={}),
+                    "C": CategoryDetail(
+                        total=human["total"],
+                        details={
+                            "C1": human["C1"],
+                            "C2": human["C2"],
+                            "C3": human["C3"],
+                        },
+                    ),
                     "D": CategoryDetail(total=0, details={}),
                     "E": CategoryDetail(total=0, details={}),
                 },
