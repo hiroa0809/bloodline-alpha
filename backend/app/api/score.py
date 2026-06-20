@@ -21,6 +21,7 @@ from app.services.bloodline_score import (
 )
 from app.services.race_condition_score import calc_race_condition_score, ensure_condition_cache
 from app.services.human_factor_score import calc_human_factor_score, ensure_human_factor_cache
+from app.services.condition_score import calc_condition_score, ensure_condition_score_cache
 
 router = APIRouter(prefix="/api/v1/score", tags=["Scoring"])
 
@@ -160,7 +161,8 @@ async def get_score(race_id: str, db: AsyncSession = Depends(get_db)):
         text(
             "SELECT ru.umaban, ru.bamei, ru.ketto_toroku_bango, "
             "  ru.tansho_odds, ru.tansho_ninki_jun, u.sandai_ketto, "
-            "  ru.chokyoshi_code, ru.kishu_code, ru.banushi_code, u.seisansha_code "
+            "  ru.chokyoshi_code, ru.kishu_code, ru.banushi_code, u.seisansha_code, "
+            "  ru.wakuban, ru.futan_juryo "
             "FROM jvd_race_uma ru "
             "LEFT JOIN jvd_uma u ON ru.ketto_toroku_bango = u.ketto_toroku_bango "
             "WHERE ru.kaisai_nen = :kaisai_nen AND ru.kaisai_tsukihi = :kaisai_tsukihi "
@@ -179,12 +181,14 @@ async def get_score(race_id: str, db: AsyncSession = Depends(get_db)):
     await ensure_nicks_cache(db)
     await ensure_condition_cache(db)
     await ensure_human_factor_cache(db)
+    await ensure_condition_score_cache(db)
 
     # 各出走馬の血統スコアを計算
     predictions = []
     for uma in umas:
         (umaban, bamei, ketto_bango, odds_str, ninki_str, sandai_ketto,
-         chokyoshi_code, kishu_code, banushi_code, seisansha_code) = uma
+         chokyoshi_code, kishu_code, banushi_code, seisansha_code,
+         wakuban, futan_juryo) = uma
 
         ketto_list = parse_sandai_ketto_full(sandai_ketto)
         if ketto_list:
@@ -217,7 +221,17 @@ async def get_score(race_id: str, db: AsyncSession = Depends(get_db)):
             seisansha_code=(seisansha_code or "").strip() or None,
         )
 
-        total_score = round(bloodline["total"] + condition["total"] + human["total"], 1)
+        # カテゴリE: コンディションスコア（新馬戦版: E1-枠順, E2-斤量）
+        e_cond = calc_condition_score(
+            keibajo_code=pk["keibajo_code"],
+            kyori=race_kyori,
+            wakuban=(wakuban or "").strip() or None,
+            futan_juryo=(futan_juryo or "").strip() or None,
+        )
+
+        total_score = round(
+            bloodline["total"] + condition["total"] + human["total"] + e_cond["total"], 1
+        )
 
         predictions.append(
             PredictionItem(
@@ -256,7 +270,10 @@ async def get_score(race_id: str, db: AsyncSession = Depends(get_db)):
                         },
                     ),
                     "D": CategoryDetail(total=0, details={}),
-                    "E": CategoryDetail(total=0, details={}),
+                    "E": CategoryDetail(
+                        total=e_cond["total"],
+                        details={"E1": e_cond["E1"], "E2": e_cond["E2"]},
+                    ),
                 },
                 sire_info=SireInfo(**bloodline["sire_info"]) if bloodline["sire_info"] else None,
                 bms_info=SireInfo(**bloodline["bms_info"]) if bloodline["bms_info"] else None,

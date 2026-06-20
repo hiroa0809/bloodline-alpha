@@ -528,6 +528,30 @@ CREATE TABLE IF NOT EXISTS human_factor_stats (
     PRIMARY KEY (person_code, role)
 );
 
+-- カテゴリE（コンディション）E1-枠順 集計（新馬戦701のみ）— calc_condition_stats.py が生成
+CREATE TABLE IF NOT EXISTS draw_stats (
+    keibajo_code    TEXT NOT NULL,       -- 競馬場コード (2B)
+    distance_band   TEXT NOT NULL,       -- 距離帯 'sprint'/'mile'/'middle'/'long'
+    wakuban         TEXT NOT NULL,       -- 枠番 '1'〜'8'
+    starts          INTEGER DEFAULT 0,   -- 延べ出走回数
+    wins            INTEGER DEFAULT 0,   -- 1着回数
+    win_rate        REAL DEFAULT 0,      -- 勝率 (wins / starts)
+    tansho_roi      REAL DEFAULT 0,      -- 単勝回収率
+    updated_at      TEXT,                -- 最終更新日時 (ISO 8601)
+    PRIMARY KEY (keibajo_code, distance_band, wakuban)
+);
+
+-- カテゴリE（コンディション）E2-斤量 集計（新馬戦701のみ）— calc_condition_stats.py が生成
+CREATE TABLE IF NOT EXISTS weight_stats (
+    futan_juryo     TEXT NOT NULL,       -- 負担重量（0.1kg単位の3桁文字列 例:'540'=54.0kg）
+    starts          INTEGER DEFAULT 0,   -- 延べ出走回数
+    wins            INTEGER DEFAULT 0,   -- 1着回数
+    win_rate        REAL DEFAULT 0,      -- 勝率 (wins / starts)
+    tansho_roi      REAL DEFAULT 0,      -- 単勝回収率
+    updated_at      TEXT,                -- 最終更新日時 (ISO 8601)
+    PRIMARY KEY (futan_juryo)
+);
+
 -- ============================================================
 -- インデックス
 -- ============================================================
