@@ -224,6 +224,7 @@ async def get_score(race_id: str, db: AsyncSession = Depends(get_db)):
         # カテゴリE: コンディションスコア（新馬戦版: E1-枠順, E2-斤量）
         e_cond = calc_condition_score(
             keibajo_code=pk["keibajo_code"],
+            track_code=race_track_code,
             kyori=race_kyori,
             wakuban=(wakuban or "").strip() or None,
             futan_juryo=(futan_juryo or "").strip() or None,

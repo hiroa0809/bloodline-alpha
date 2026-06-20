@@ -61,6 +61,18 @@ def _kyori_to_distance_band(kyori: str) -> str | None:
     return "long"
 
 
+def _track_to_surface(track_code: str) -> str | None:
+    """track_code先頭1桁 → 'turf'(芝) / 'dirt'(ダート) / None(障害等)。カテゴリBと同区分。"""
+    if not track_code:
+        return None
+    first = track_code[0]
+    if first == "1":
+        return "turf"
+    if first == "2":
+        return "dirt"
+    return None
+
+
 # --- キャッシュ構築 ---
 
 async def _build_condition_score_cache(db: AsyncSession) -> tuple[dict, dict] | None:
@@ -82,18 +94,18 @@ async def _build_condition_score_cache(db: AsyncSession) -> tuple[dict, dict] | 
         )
         return None
 
-    # E1: draw_stats を (keibajo, distance_band) でグルーピング
+    # E1: draw_stats を (keibajo, surface, distance_band) でグルーピング
     draw_cache: dict = {}
     result = await db.execute(
         text(
-            "SELECT keibajo_code, distance_band, wakuban, win_rate, tansho_roi "
+            "SELECT keibajo_code, surface, distance_band, wakuban, win_rate, tansho_roi "
             "FROM draw_stats WHERE starts >= :min_starts"
         ),
         {"min_starts": _MIN_STARTS},
     )
     grouped: dict = {}
-    for keibajo, dband, wakuban, win_rate, roi in result.fetchall():
-        grouped.setdefault((keibajo, dband), []).append((wakuban, win_rate, roi))
+    for keibajo, surface, dband, wakuban, win_rate, roi in result.fetchall():
+        grouped.setdefault((keibajo, surface, dband), []).append((wakuban, win_rate, roi))
     for key, entries in grouped.items():
         draw_cache[key] = {
             "win_rates": sorted(e[1] for e in entries),
@@ -154,14 +166,17 @@ async def refresh_condition_score_cache(db: AsyncSession) -> None:
 
 # --- スコア計算 ---
 
-def _calc_e1(keibajo_code: str | None, kyori: str, wakuban: str | None, weight: float) -> float:
-    """E1: 枠順スコア。競馬場×距離帯ごとの枠番ベース成績をパーセンタイル化。"""
+def _calc_e1(
+    keibajo_code: str | None, track_code: str, kyori: str, wakuban: str | None, weight: float
+) -> float:
+    """E1: 枠順スコア。競馬場×馬場(芝/ダート)×距離帯ごとの枠番ベース成績をパーセンタイル化。"""
     if not wakuban or not keibajo_code:
         return 0.0
+    surface = _track_to_surface(track_code)
     distance_band = _kyori_to_distance_band(kyori)
-    if not distance_band:
+    if not surface or not distance_band:
         return 0.0
-    cache = _draw_cache.get((keibajo_code, distance_band))
+    cache = _draw_cache.get((keibajo_code, surface, distance_band))
     if not cache:
         return 0.0
     info = cache["lookup"].get(str(wakuban).strip())
@@ -190,6 +205,7 @@ def _calc_e2(futan_juryo: str | None, weight: float) -> float:
 
 def calc_condition_score(
     keibajo_code: str | None,
+    track_code: str,
     kyori: str,
     wakuban: str | None,
     futan_juryo: str | None,
@@ -211,7 +227,7 @@ def calc_condition_score(
             "コンディションキャッシュが未初期化です。ensure_condition_score_cache()を呼んでください。"
         )
 
-    e1 = _calc_e1(keibajo_code, kyori, wakuban, w["E1"])
+    e1 = _calc_e1(keibajo_code, track_code, kyori, wakuban, w["E1"])
     e2 = _calc_e2(futan_juryo, w["E2"])
     total = round(e1 + e2, 1)
 

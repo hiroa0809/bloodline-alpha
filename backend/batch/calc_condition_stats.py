@@ -40,6 +40,13 @@ WORK_WEIGHT = "weight_stats_new"
 # （新馬戦は2歳枠だけでなく3歳枠にも存在するため両方を見る）
 MAIDEN_FILTER = "'701' IN (r.kyoso_joken_code_2sai, r.kyoso_joken_code_3sai)"
 
+# 馬場（芝/ダート）— track_code先頭1桁で判定。カテゴリBと同一区分
+SURFACE_CASE = """
+    CASE WHEN SUBSTR(r.track_code, 1, 1) = '1' THEN 'turf'
+         WHEN SUBSTR(r.track_code, 1, 1) = '2' THEN 'dirt'
+    END
+"""
+
 # 距離帯 — カテゴリBと同一区分
 DISTANCE_CASE = """
     CASE WHEN CAST(r.kyori AS INTEGER) <= 1400 THEN 'sprint'
@@ -92,6 +99,7 @@ def create_work_tables(conn: sqlite3.Connection) -> None:
     conn.execute(f"""
         CREATE TABLE {WORK_DRAW} (
             keibajo_code    TEXT NOT NULL,
+            surface         TEXT NOT NULL,
             distance_band   TEXT NOT NULL,
             wakuban         TEXT NOT NULL,
             starts          INTEGER DEFAULT 0,
@@ -99,7 +107,7 @@ def create_work_tables(conn: sqlite3.Connection) -> None:
             win_rate        REAL DEFAULT 0,
             tansho_roi      REAL DEFAULT 0,
             updated_at      TEXT,
-            PRIMARY KEY (keibajo_code, distance_band, wakuban)
+            PRIMARY KEY (keibajo_code, surface, distance_band, wakuban)
         )
     """)
     conn.execute(f"DROP TABLE IF EXISTS {WORK_WEIGHT}")
@@ -122,9 +130,10 @@ def aggregate_draw(conn: sqlite3.Connection, now: str) -> int:
     logger.info("集計中: draw_stats（E1-枠順）")
     sql = f"""
         INSERT INTO {WORK_DRAW}
-            (keibajo_code, distance_band, wakuban, starts, wins, win_rate, tansho_roi, updated_at)
+            (keibajo_code, surface, distance_band, wakuban, starts, wins, win_rate, tansho_roi, updated_at)
         SELECT
             r.keibajo_code,
+            {SURFACE_CASE} AS surface,
             {DISTANCE_CASE} AS distance_band,
             ru.wakuban,
             COUNT(*) AS starts,
@@ -138,7 +147,7 @@ def aggregate_draw(conn: sqlite3.Connection, now: str) -> int:
           AND ru.wakuban IS NOT NULL AND ru.wakuban != ''
           AND SUBSTR(r.track_code, 1, 1) IN ('1', '2')
           AND {_base_where_clause()}
-        GROUP BY r.keibajo_code, distance_band, ru.wakuban
+        GROUP BY r.keibajo_code, surface, distance_band, ru.wakuban
     """
     count = conn.execute(sql).rowcount
     logger.info(f"集計完了: draw_stats, {count:,} セル")
