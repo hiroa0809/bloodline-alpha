@@ -29,6 +29,9 @@ pgdata/
 # Claude Code 個人スキル（非公開・各自のローカル環境用）
 .claude/skills/
 
+# クロスレビュー成果物（毎回上書きされる一時生成物）
+.claude/reviews/
+
 # Antigravity IDE ワークフロー定義（非公開・skills と同内容のミラー）
 .agents/
 
