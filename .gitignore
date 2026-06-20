@@ -26,14 +26,14 @@ pgdata/
 .idea/
 *.swp
 
-# Claude Code 個人スキル（非公開・各自のローカル環境用）
-.claude/skills/
-
-# クロスレビュー成果物（毎回上書きされる一時生成物）
-.claude/reviews/
+# Claude Code 個人ツール・メモ一式（設定/フック/スキル/引継ぎノート — システム稼働に不要・非公開）
+.claude/
 
 # Antigravity IDE ワークフロー定義（非公開・skills と同内容のミラー）
 .agents/
+
+# AI指示・プロジェクト戦略ノート（バックテスト方法論・配点思想等の考え方を含む・非公開）
+CLAUDE.md
 
 # データベース（インポーターで再生成可能）
 backend/bloodline.db
@@ -43,8 +43,9 @@ backend/bloodline.db-wal
 # ログファイル
 backend/logs/
 
-# JV-Data仕様書（JRA-VAN配布、再ダウンロード可能）
+# 設計資料・JV-Data仕様書（非公開・JRA-VAN配布分は再DL可能）
 docs/vdata_spec/
+docs/ui_screen_design.md
 
 # OS
 Thumbs.db
