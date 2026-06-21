@@ -32,7 +32,7 @@ type Prediction = {
   odds: number;
   popularity: number;
   total_score: number;
-  category_scores: Record<'A' | 'B' | 'C' | 'D' | 'E', CategoryScore>;
+  category_scores: Partial<Record<'A' | 'B' | 'C' | 'D' | 'E', CategoryScore>>;
   sire_info: SireInfo | null;  // #11 馬詳細で使用
   bms_info: SireInfo | null;   // #11 馬詳細で使用
 }
@@ -72,12 +72,13 @@ export default function Home() {
   const [updatedAt, setUpdatedAt] = useState('')
 
   const fetchScore = async () => {
-    if (!raceId) return
+    const id = raceId.trim()
+    if (!id || loading) return  // 再入防止: 連打での並行リクエスト/レスポンス競合を防ぐ
     setLoading(true)
     setError('')
     try {
       const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8001'
-      const res = await fetch(`${apiUrl}/api/v1/score/${raceId}`)
+      const res = await fetch(`${apiUrl}/api/v1/score/${encodeURIComponent(id)}`)
       if (!res.ok) {
         if (res.status === 404) throw new Error('該当レースが見つかりません (race_id を確認してください)')
         throw new Error(`API エラー (${res.status})`)
@@ -113,7 +114,7 @@ export default function Home() {
               type="text"
               value={raceId}
               onChange={(e) => setRaceId(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter') fetchScore() }}
+              onKeyDown={(e) => { if (e.key === 'Enter' && !loading) fetchScore() }}
               placeholder="レースID (16桁)"
               className="bg-gray-900 border border-gray-700 rounded-md px-4 py-2 text-sm focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-all shadow-sm"
             />
@@ -193,7 +194,7 @@ export default function Home() {
                       {/* オッズ(人気) */}
                       <td className="px-3 py-3 whitespace-nowrap">
                         <div className="font-mono text-gray-200">{p.odds.toFixed(1)}</div>
-                        <div className="text-xs text-gray-500 mt-0.5">{p.popularity || '-'}番人気</div>
+                        <div className="text-xs text-gray-500 mt-0.5">{p.popularity > 0 ? `${p.popularity}番人気` : '-'}</div>
                       </td>
                       {/* 総合スコア + バー */}
                       <td className="px-3 py-3 min-w-[180px]">
