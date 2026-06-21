@@ -102,6 +102,65 @@ def parse_race_id(race_id: str) -> dict:
     }
 
 
+# 競走種別コード（JV-Data 2005）→ 年齢区分の表記。
+# 注: 2000年以前は数え年表記のため呼称が1歳ずれる（例: 11 は～2000年だと「3歳」）。
+#     Phase1 のライブ対象は現行レースのため満年齢（2001年～）の呼称で扱う。
+_SHUBETSU_AGE = {
+    "11": "2歳",
+    "12": "3歳",
+    "13": "3歳以上",
+    "14": "4歳以上",
+    "18": "障害3歳以上",
+    "19": "障害4歳以上",
+}
+
+# 競走条件コード（JV-Data 2007）→ クラス呼称。新馬戦中心に主要条件のみ収録。
+_JOKEN_NAME = {
+    "701": "新馬",
+    "702": "未出走",
+    "703": "未勝利",
+    "005": "1勝クラス",
+    "010": "2勝クラス",
+    "016": "3勝クラス",
+    "999": "オープン",
+}
+
+
+def derive_race_name(
+    hondai: str | None,
+    ryakusho: str | None,
+    shubetsu_code: str | None,
+    joken_codes: dict[str, str | None],
+) -> str:
+    """レース表示名を決定する。
+
+    重賞・特別は競走名本題（kyoso_mei_hondai）を持つためそれを最優先する。
+    新馬・未勝利等は本題が空なので、競走種別コード（年齢）＋競走条件コード（クラス）から
+    「3歳新馬」のように組み立てる（JV-Data 仕様 2005/2007 準拠）。
+    """
+    name = (hondai or "").strip() or (ryakusho or "").strip()
+    if name:
+        return name
+
+    age = _SHUBETSU_AGE.get((shubetsu_code or "").strip(), "")
+    # 競走種別の年齢に対応する条件列を優先し、無ければ他列の最初の非0を採用
+    primary = {"11": "2sai", "12": "3sai", "13": "3sai", "14": "4sai"}.get(
+        (shubetsu_code or "").strip()
+    )
+    keys = ([primary] if primary else []) + ["2sai", "3sai", "4sai", "5sai_ijo"]
+    joken_name = ""
+    seen: set[str] = set()
+    for k in keys:
+        if k in seen:
+            continue
+        seen.add(k)
+        code = (joken_codes.get(k) or "").strip()
+        if code and code != "000":
+            joken_name = _JOKEN_NAME.get(code, "")
+            break
+    return (age + joken_name).strip()
+
+
 def parse_odds(odds_str: str | None) -> float:
     """JV-Data 単勝オッズ（4桁文字列）を float に変換"""
     try:
@@ -235,7 +294,9 @@ async def get_score(race_id: str, db: AsyncSession = Depends(get_db)):
     race_result = await db.execute(
         text(
             "SELECT kyoso_mei_hondai, kyoso_mei_ryakusho10, kyori, track_code, "
-            "  shiba_baba_jotai_code, dirt_baba_jotai_code "
+            "  shiba_baba_jotai_code, dirt_baba_jotai_code, "
+            "  kyoso_shubetsu_code, kyoso_joken_code_2sai, kyoso_joken_code_3sai, "
+            "  kyoso_joken_code_4sai, kyoso_joken_code_5sai_ijo "
             "FROM jvd_race "
             "WHERE kaisai_nen = :kaisai_nen AND kaisai_tsukihi = :kaisai_tsukihi "
             "  AND keibajo_code = :keibajo_code AND kaisai_kai = :kaisai_kai "
@@ -247,7 +308,12 @@ async def get_score(race_id: str, db: AsyncSession = Depends(get_db)):
     if not race:
         raise HTTPException(status_code=404, detail="レースが見つかりません")
 
-    race_name = (race[0] or race[1] or "").strip()
+    race_name = derive_race_name(
+        race[0],
+        race[1],
+        race[6],
+        {"2sai": race[7], "3sai": race[8], "4sai": race[9], "5sai_ijo": race[10]},
+    )
     race_kyori = race[2] or ""
     race_track_code = race[3] or ""
     race_shiba_baba = race[4] or ""
