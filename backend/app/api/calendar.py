@@ -169,7 +169,12 @@ async def list_races(
     items: list[RaceListItem] = []
     for r in rows:
         jo, kai, nichime, rno = r[0], r[1], r[2], r[3]
-        race_id = f"{nen}{tsukihi}{jo}{kai}{nichime}{rno}"
+        # 16桁 race_id 契約を保証するため各2桁要素をゼロ埋め（年4+月日4+場2+回2+日2+R2）
+        race_id = (
+            f"{nen}{tsukihi}"
+            f"{str(jo).zfill(2)}{str(kai).zfill(2)}"
+            f"{str(nichime).zfill(2)}{str(rno).zfill(2)}"
+        )
         race_name = derive_race_name(
             r[4],
             r[5],

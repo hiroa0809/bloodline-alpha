@@ -24,6 +24,7 @@ export default function CalendarRaces({
     const load = async () => {
       setLoading(true)
       setError('')
+      setRaces([])  // 日付切替/失敗時に前回日付のレースが残留しないようクリア
       try {
         const res = await fetch(`${API_BASE}/api/v1/calendar/races?date=${date}`)
         if (!res.ok) throw new Error(`API エラー (${res.status})`)
