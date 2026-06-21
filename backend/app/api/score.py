@@ -130,7 +130,7 @@ def derive_race_name(
     hondai: str | None,
     ryakusho: str | None,
     shubetsu_code: str | None,
-    joken_codes: dict,
+    joken_codes: dict[str, str | None],
 ) -> str:
     """レース表示名を決定する。
 
