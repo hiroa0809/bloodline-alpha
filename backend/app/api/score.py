@@ -19,14 +19,24 @@ from app.services.bloodline_score import (
     ensure_percentile_cache,
     parse_sandai_ketto_full,
 )
-from app.services.race_condition_score import calc_race_condition_score, ensure_condition_cache
-from app.services.human_factor_score import calc_human_factor_score, ensure_human_factor_cache
-from app.services.condition_score import calc_condition_score, ensure_condition_score_cache
+from app.services.race_condition_score import (
+    calc_race_condition_score,
+    ensure_condition_cache,
+)
+from app.services.human_factor_score import (
+    calc_human_factor_score,
+    ensure_human_factor_cache,
+)
+from app.services.condition_score import (
+    calc_condition_score,
+    ensure_condition_score_cache,
+)
 
 router = APIRouter(prefix="/api/v1/score", tags=["Scoring"])
 
 
 # --- Pydantic レスポンスモデル（Swagger UI 表示用） ---
+
 
 class SireInfo(BaseModel):
     name: str
@@ -44,6 +54,15 @@ class PredictionItem(BaseModel):
     horse_number: int
     horse_name: str
     ketto_toroku_bango: str
+    # 出馬表情報（JRA-VAN相当）— defaults でモック互換
+    waku: int = 0
+    sei_rei: str = ""  # 性齢（例: 牡2）
+    keiro: str = ""  # 毛色
+    kishu: str = ""  # 騎手名
+    futan: float = 0.0  # 斤量(kg)
+    chokyoshi: str = ""  # 調教師（所属付き 例: (美)武市）
+    banushi: str = ""  # 馬主
+    seisansha: str = ""  # 生産者
     odds: float
     popularity: int
     total_score: float
@@ -59,6 +78,7 @@ class RaceScoreResponse(BaseModel):
 
 
 # --- ユーティリティ ---
+
 
 def parse_race_id(race_id: str) -> dict:
     """16桁の race_id を6カラムPKに分解"""
@@ -98,7 +118,52 @@ def safe_int(value: str | None, default: int = 0) -> int:
         return default
 
 
+# --- 出馬表コード→表記 変換（JV-Data準拠） ---
+
+SEIBETSU = {"1": "牡", "2": "牝", "3": "セ"}
+KEIRO = {
+    "01": "栗毛",
+    "02": "栃栗毛",
+    "03": "鹿毛",
+    "04": "黒鹿毛",
+    "05": "青鹿毛",
+    "06": "青毛",
+    "07": "芦毛",
+    "08": "栗粕毛",
+    "09": "鹿粕毛",
+    "10": "青粕毛",
+    "11": "白毛",
+}
+TOZAI = {"1": "美", "2": "栗", "3": "地", "4": "外"}
+
+
+def fmt_sei_rei(seibetsu_code: str | None, barei: str | None) -> str:
+    """性別コード＋馬齢 → 例: 牡2"""
+    sei = SEIBETSU.get((seibetsu_code or "").strip(), "")
+    try:
+        age = str(int(barei))
+    except (ValueError, TypeError):
+        age = (barei or "").strip()
+    return f"{sei}{age}".strip()
+
+
+def fmt_futan(futan: str | None) -> float:
+    """負担重量（0.1kg単位の3桁文字列, 例 540）→ 54.0"""
+    try:
+        return int(futan) / 10.0
+    except (ValueError, TypeError):
+        return 0.0
+
+
+def fmt_chokyoshi(mei: str | None, tozai_code: str | None) -> str:
+    """調教師名に所属（美/栗）を前置。例: (美)武市"""
+    name = (mei or "").strip()
+    tozai = TOZAI.get((tozai_code or "").strip(), "")
+    return f"({tozai}){name}" if tozai and name else name
+
+
 # --- エンドポイント ---
+
 
 @router.get("/mock/{race_id}", response_model=RaceScoreResponse)
 async def get_mock_score(race_id: str):
@@ -108,19 +173,49 @@ async def get_mock_score(race_id: str):
         race_name="デモ用レース",
         predictions=[
             PredictionItem(
-                horse_number=1, horse_name="リアルスティール産駒", ketto_toroku_bango="0000000000",
-                odds=5.5, popularity=3, total_score=85,
-                category_scores={"A": CategoryDetail(total=55, details={"A1": 35, "A2": 20}), "B": CategoryDetail(total=18, details={}), "C": CategoryDetail(total=12, details={"C1": 5, "C2": 5, "C3": 2}), "D": CategoryDetail(total=0, details={}), "E": CategoryDetail(total=0, details={})},
+                horse_number=1,
+                horse_name="リアルスティール産駒",
+                ketto_toroku_bango="0000000000",
+                odds=5.5,
+                popularity=3,
+                total_score=85,
+                category_scores={
+                    "A": CategoryDetail(total=55, details={"A1": 35, "A2": 20}),
+                    "B": CategoryDetail(total=18, details={}),
+                    "C": CategoryDetail(total=12, details={"C1": 5, "C2": 5, "C3": 2}),
+                    "D": CategoryDetail(total=0, details={}),
+                    "E": CategoryDetail(total=0, details={}),
+                },
             ),
             PredictionItem(
-                horse_number=2, horse_name="過剰人気馬", ketto_toroku_bango="0000000001",
-                odds=1.8, popularity=1, total_score=45,
-                category_scores={"A": CategoryDetail(total=20, details={"A1": 12, "A2": 8}), "B": CategoryDetail(total=15, details={}), "C": CategoryDetail(total=10, details={"C1": 4, "C2": 4, "C3": 2}), "D": CategoryDetail(total=0, details={}), "E": CategoryDetail(total=0, details={})},
+                horse_number=2,
+                horse_name="過剰人気馬",
+                ketto_toroku_bango="0000000001",
+                odds=1.8,
+                popularity=1,
+                total_score=45,
+                category_scores={
+                    "A": CategoryDetail(total=20, details={"A1": 12, "A2": 8}),
+                    "B": CategoryDetail(total=15, details={}),
+                    "C": CategoryDetail(total=10, details={"C1": 4, "C2": 4, "C3": 2}),
+                    "D": CategoryDetail(total=0, details={}),
+                    "E": CategoryDetail(total=0, details={}),
+                },
             ),
             PredictionItem(
-                horse_number=3, horse_name="穴馬", ketto_toroku_bango="0000000002",
-                odds=25.0, popularity=8, total_score=75,
-                category_scores={"A": CategoryDetail(total=50, details={"A1": 30, "A2": 20}), "B": CategoryDetail(total=15, details={}), "C": CategoryDetail(total=10, details={"C1": 4, "C2": 4, "C3": 2}), "D": CategoryDetail(total=0, details={}), "E": CategoryDetail(total=0, details={})},
+                horse_number=3,
+                horse_name="穴馬",
+                ketto_toroku_bango="0000000002",
+                odds=25.0,
+                popularity=8,
+                total_score=75,
+                category_scores={
+                    "A": CategoryDetail(total=50, details={"A1": 30, "A2": 20}),
+                    "B": CategoryDetail(total=15, details={}),
+                    "C": CategoryDetail(total=10, details={"C1": 4, "C2": 4, "C3": 2}),
+                    "D": CategoryDetail(total=0, details={}),
+                    "E": CategoryDetail(total=0, details={}),
+                },
             ),
         ],
     )
@@ -129,7 +224,9 @@ async def get_mock_score(race_id: str):
 @router.get("/{race_id}", response_model=RaceScoreResponse)
 async def get_score(race_id: str, db: AsyncSession = Depends(get_db)):
     """
-    指定レースの全出走馬に対して血統スコア（カテゴリA）を計算して返す。
+    指定レースの全出走馬に対して新馬戦スコアを計算して返す。
+    内訳: A=血統 / B=レース条件 / C=人的要素 / E=コンディション（E1-枠順, E2-斤量）。
+    D=スピード指標は Phase 1（新馬戦専用）では対象外のため常に 0。
     race_id: 16桁（年4+月日4+競馬場2+回2+日目2+レース番号2）
     """
     pk = parse_race_id(race_id)
@@ -162,7 +259,10 @@ async def get_score(race_id: str, db: AsyncSession = Depends(get_db)):
             "SELECT ru.umaban, ru.bamei, ru.ketto_toroku_bango, "
             "  ru.tansho_odds, ru.tansho_ninki_jun, u.sandai_ketto, "
             "  ru.chokyoshi_code, ru.kishu_code, ru.banushi_code, u.seisansha_code, "
-            "  ru.wakuban, ru.futan_juryo "
+            "  ru.wakuban, ru.futan_juryo, "
+            "  ru.seibetsu_code, ru.barei, ru.keiro_code, "
+            "  ru.kishu_mei_ryakusho, ru.chokyoshi_mei_ryakusho, ru.tozai_shozoku_code, "
+            "  ru.banushi_mei, u.seisansha_mei "
             "FROM jvd_race_uma ru "
             "LEFT JOIN jvd_uma u ON ru.ketto_toroku_bango = u.ketto_toroku_bango "
             "WHERE ru.kaisai_nen = :kaisai_nen AND ru.kaisai_tsukihi = :kaisai_tsukihi "
@@ -186,16 +286,37 @@ async def get_score(race_id: str, db: AsyncSession = Depends(get_db)):
     # 各出走馬の血統スコアを計算
     predictions = []
     for uma in umas:
-        (umaban, bamei, ketto_bango, odds_str, ninki_str, sandai_ketto,
-         chokyoshi_code, kishu_code, banushi_code, seisansha_code,
-         wakuban, futan_juryo) = uma
+        (
+            umaban,
+            bamei,
+            ketto_bango,
+            odds_str,
+            ninki_str,
+            sandai_ketto,
+            chokyoshi_code,
+            kishu_code,
+            banushi_code,
+            seisansha_code,
+            wakuban,
+            futan_juryo,
+            seibetsu_code,
+            barei,
+            keiro_code,
+            kishu_mei,
+            chokyoshi_mei,
+            tozai_code,
+            banushi_mei,
+            seisansha_mei,
+        ) = uma
 
         ketto_list = parse_sandai_ketto_full(sandai_ketto)
         if ketto_list:
             entry0 = ketto_list[0] if isinstance(ketto_list[0], dict) else {}
             sire_bango = (entry0.get("hanshoku_toroku_bango") or "").strip() or None
             if len(ketto_list) > 4 and isinstance(ketto_list[4], dict):
-                bms_bango = (ketto_list[4].get("hanshoku_toroku_bango") or "").strip() or None
+                bms_bango = (
+                    ketto_list[4].get("hanshoku_toroku_bango") or ""
+                ).strip() or None
             else:
                 bms_bango = None
         else:
@@ -231,7 +352,8 @@ async def get_score(race_id: str, db: AsyncSession = Depends(get_db)):
         )
 
         total_score = round(
-            bloodline["total"] + condition["total"] + human["total"] + e_cond["total"], 1
+            bloodline["total"] + condition["total"] + human["total"] + e_cond["total"],
+            1,
         )
 
         predictions.append(
@@ -239,6 +361,14 @@ async def get_score(race_id: str, db: AsyncSession = Depends(get_db)):
                 horse_number=safe_int(umaban),
                 horse_name=(bamei or "").strip(),
                 ketto_toroku_bango=ketto_bango or "",
+                waku=safe_int(wakuban),
+                sei_rei=fmt_sei_rei(seibetsu_code, barei),
+                keiro=KEIRO.get((keiro_code or "").strip(), (keiro_code or "").strip()),
+                kishu=(kishu_mei or "").strip(),
+                futan=fmt_futan(futan_juryo),
+                chokyoshi=fmt_chokyoshi(chokyoshi_mei, tozai_code),
+                banushi=(banushi_mei or "").strip(),
+                seisansha=(seisansha_mei or "").strip(),
                 odds=parse_odds(odds_str),
                 popularity=safe_int(ninki_str),
                 total_score=total_score,
@@ -276,8 +406,12 @@ async def get_score(race_id: str, db: AsyncSession = Depends(get_db)):
                         details={"E1": e_cond["E1"], "E2": e_cond["E2"]},
                     ),
                 },
-                sire_info=SireInfo(**bloodline["sire_info"]) if bloodline["sire_info"] else None,
-                bms_info=SireInfo(**bloodline["bms_info"]) if bloodline["bms_info"] else None,
+                sire_info=SireInfo(**bloodline["sire_info"])
+                if bloodline["sire_info"]
+                else None,
+                bms_info=SireInfo(**bloodline["bms_info"])
+                if bloodline["bms_info"]
+                else None,
             )
         )
 
