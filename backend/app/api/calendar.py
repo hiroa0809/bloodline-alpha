@@ -169,12 +169,13 @@ async def list_races(
     items: list[RaceListItem] = []
     for r in rows:
         jo, kai, nichime, rno = r[0], r[1], r[2], r[3]
-        # 16桁 race_id 契約を保証するため各2桁要素をゼロ埋め（年4+月日4+場2+回2+日2+R2）
-        race_id = (
-            f"{nen}{tsukihi}"
-            f"{str(jo).zfill(2)}{str(kai).zfill(2)}"
-            f"{str(nichime).zfill(2)}{str(rno).zfill(2)}"
-        )
+        # 16桁 race_id 契約を保証するため各2桁要素をゼロ埋め（年4+月日4+場2+回2+日2+R2）。
+        # 競馬場名ルックアップ等でも同じ正規化値を使い不整合を防ぐ。
+        jo_s = str(jo).zfill(2)
+        kai_s = str(kai).zfill(2)
+        nichime_s = str(nichime).zfill(2)
+        rno_s = str(rno).zfill(2)
+        race_id = f"{nen}{tsukihi}{jo_s}{kai_s}{nichime_s}{rno_s}"
         race_name = derive_race_name(
             r[4],
             r[5],
@@ -184,8 +185,8 @@ async def list_races(
         items.append(
             RaceListItem(
                 race_id=race_id,
-                keibajo=KEIBAJO_NAME.get(jo, jo),
-                race_bango=int(rno) if str(rno).isdigit() else 0,
+                keibajo=KEIBAJO_NAME.get(jo_s, jo_s),
+                race_bango=int(rno_s) if rno_s.isdigit() else 0,
                 race_name=race_name,
                 surface=track_surface(r[12]),
                 kyori=int(r[11]) if str(r[11]).isdigit() else 0,
