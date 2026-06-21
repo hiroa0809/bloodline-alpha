@@ -5,7 +5,7 @@ import uvicorn
 app = FastAPI(
     title="Bloodline Alpha API",
     description="Expected value calculation API for JRA horse racing",
-    version="1.0.0"
+    version="1.0.0",
 )
 
 # CORS設定 (Next.js フロントエンドからのアクセスを許可)
@@ -17,16 +17,24 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 @app.get("/")
 async def root():
     return {"message": "Welcome to Bloodline Alpha API"}
+
 
 @app.get("/health")
 async def health_check():
     return {"status": "ok"}
 
+
 from app.api import score
+
 app.include_router(score.router)
+
+from app.api import calendar
+
+app.include_router(calendar.router)
 
 if __name__ == "__main__":
     uvicorn.run("app.main:app", host="0.0.0.0", port=8001, reload=True)
