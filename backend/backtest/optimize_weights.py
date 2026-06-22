@@ -40,6 +40,7 @@ if str(_BACKEND_DIR) not in sys.path:
 from backtest.run_backtest import (  # noqa: E402
     DEFAULT_WEIGHTS,
     DEFAULT_WR_BLEND,
+    count_bettable_races,
     evaluate,
     load_races,
 )
@@ -114,8 +115,8 @@ def optimize_range(
     """
     # 有効レースが0件のレンジは ROI=0.0 で「成功」扱いになり任意パラメータが
     # 最良値として保存され下流へ伝播する。明示的に失敗させる（fail-fast）。
-    probe = evaluate(races, y_start, y_end, DEFAULT_WEIGHTS, DEFAULT_WR_BLEND)
-    if probe["n"] == 0:
+    # 判定は重み非依存にする（evaluate の n は選択馬のオッズ有無に依存するため不可）。
+    if count_bettable_races(races, y_start, y_end) == 0:
         raise ValueError(
             f"指定期間 {y_start}-{y_end} に最適化対象の有効レースがありません。"
         )

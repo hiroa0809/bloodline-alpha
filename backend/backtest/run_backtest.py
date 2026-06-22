@@ -150,6 +150,22 @@ def load_races(conn: sqlite3.Connection) -> dict[str, list[sqlite3.Row]]:
     return races
 
 
+def count_bettable_races(
+    races: dict[str, list[sqlite3.Row]], year_start: int, year_end: int
+) -> int:
+    """指定年範囲で単勝オッズを持つ馬が1頭以上いるレース数（重み非依存のサンプルサイズ）。
+
+    evaluate の n は argmax で選ばれた馬のオッズ有無に依存し重み依存になるため、
+    最適化対象の有無判定や fold の加重平均では本関数の重み非依存カウントを使う。
+    """
+    return sum(
+        1
+        for runners in races.values()
+        if year_start <= runners[0]["as_of_year"] <= year_end
+        and any(r["tansho_odds"] is not None for r in runners)
+    )
+
+
 def evaluate(
     races: dict[str, list[sqlite3.Row]],
     year_start: int,

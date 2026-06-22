@@ -40,8 +40,7 @@ from backtest.optimize_weights import (  # noqa: E402
     optimize_range,
 )
 from backtest.run_backtest import (  # noqa: E402
-    DEFAULT_WEIGHTS,
-    DEFAULT_WR_BLEND,
+    count_bettable_races,
     evaluate,
     load_races,
 )
@@ -123,8 +122,9 @@ def run_walkforward_cv(races: dict, seeds: list[int], n_trials: int) -> dict:
         tr_mean = statistics.mean(train_rois)
         va_mean = statistics.mean(valid_rois)
         # レース数（重み非依存）。fold 間の加重平均に使う。
-        train_n = evaluate(races, tr_s, tr_e, DEFAULT_WEIGHTS, DEFAULT_WR_BLEND)["n"]
-        valid_n = evaluate(races, va_s, va_e, DEFAULT_WEIGHTS, DEFAULT_WR_BLEND)["n"]
+        # evaluate の n は選択馬のオッズ有無に依存し重み依存になるため使わない。
+        train_n = count_bettable_races(races, tr_s, tr_e)
+        valid_n = count_bettable_races(races, va_s, va_e)
         fold_results.append(
             {
                 "train": [tr_s, tr_e],
