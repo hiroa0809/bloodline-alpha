@@ -39,7 +39,12 @@ from backtest.optimize_weights import (  # noqa: E402
     expand_weights,
     optimize_range,
 )
-from backtest.run_backtest import evaluate, load_races  # noqa: E402
+from backtest.run_backtest import (  # noqa: E402
+    DEFAULT_WEIGHTS,
+    DEFAULT_WR_BLEND,
+    evaluate,
+    load_races,
+)
 
 DB_PATH = _BACKEND_DIR / "bloodline.db"
 OUT_PATH = _BACKEND_DIR / "backtest" / "robustness_report.json"
@@ -117,6 +122,9 @@ def run_walkforward_cv(races: dict, seeds: list[int], n_trials: int) -> dict:
             valid_rois.append(valid["roi"])
         tr_mean = statistics.mean(train_rois)
         va_mean = statistics.mean(valid_rois)
+        # レース数（重み非依存）。fold 間の加重平均に使う。
+        train_n = evaluate(races, tr_s, tr_e, DEFAULT_WEIGHTS, DEFAULT_WR_BLEND)["n"]
+        valid_n = evaluate(races, va_s, va_e, DEFAULT_WEIGHTS, DEFAULT_WR_BLEND)["n"]
         fold_results.append(
             {
                 "train": [tr_s, tr_e],
@@ -124,6 +132,8 @@ def run_walkforward_cv(races: dict, seeds: list[int], n_trials: int) -> dict:
                 "train_roi_mean": tr_mean,
                 "valid_roi_mean": va_mean,
                 "gap": tr_mean - va_mean,
+                "train_n": train_n,
+                "valid_n": valid_n,
             }
         )
         logger.info(
@@ -132,24 +142,49 @@ def run_walkforward_cv(races: dict, seeds: list[int], n_trials: int) -> dict:
             f"(過学習ギャップ {(tr_mean - va_mean) * 100:+.2f}pt)"
         )
 
-    valid_overall = statistics.mean([f["valid_roi_mean"] for f in fold_results])
-    gap_overall = statistics.mean([f["gap"] for f in fold_results])
-    logger.info(
-        f"  → 検証ROI平均（過学習補正後の実力見積もり）: {valid_overall * 100:.2f}%"
+    # 検証区間の大きさが fold ごとに違う（3/3/2年）ため、単純平均でなくレース数で
+    # 加重平均する。これで検証ROI（実力見積もり）の歪みを抑える。
+    total_va_n = sum(f["valid_n"] for f in fold_results)
+    total_tr_n = sum(f["train_n"] for f in fold_results)
+    valid_overall = (
+        sum(f["valid_roi_mean"] * f["valid_n"] for f in fold_results) / total_va_n
+        if total_va_n
+        else 0.0
     )
-    logger.info(f"  → 平均過学習ギャップ: {gap_overall * 100:+.2f}pt")
+    train_overall = (
+        sum(f["train_roi_mean"] * f["train_n"] for f in fold_results) / total_tr_n
+        if total_tr_n
+        else 0.0
+    )
+    gap_overall = train_overall - valid_overall
+    logger.info(
+        f"  → 検証ROI加重平均（過学習補正後の実力見積もり）: {valid_overall * 100:.2f}%"
+    )
+    logger.info(f"  → 過学習ギャップ（加重）: {gap_overall * 100:+.2f}pt")
     return {
         "folds": fold_results,
         "valid_roi_overall": valid_overall,
+        "train_roi_overall": train_overall,
         "gap_overall": gap_overall,
     }
 
 
 def main() -> None:
     """マルチシード安定性とIS内CVを実行し、頑健性レポートを保存する（OOS封印）。"""
+
+    def _positive_int(v: str) -> int:
+        iv = int(v)
+        if iv <= 0:
+            raise argparse.ArgumentTypeError("1以上の整数を指定してください")
+        return iv
+
     ap = argparse.ArgumentParser(description="#B3 頑健性検証（マルチシード+IS内CV）")
-    ap.add_argument("--seeds", type=int, default=5, help="シード本数（42から連番）")
-    ap.add_argument("--n-trials", type=int, default=800, help="1最適化あたりの試行数")
+    ap.add_argument(
+        "--seeds", type=_positive_int, default=5, help="シード本数（42から連番）"
+    )
+    ap.add_argument(
+        "--n-trials", type=_positive_int, default=800, help="1最適化あたりの試行数"
+    )
     args = ap.parse_args()
     seeds = list(range(42, 42 + args.seeds))
 

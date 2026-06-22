@@ -112,6 +112,14 @@ def optimize_range(
 
     返却: {"value": IS ROI, "cat_weights": {...}, "wr_blend": float}
     """
+    # 有効レースが0件のレンジは ROI=0.0 で「成功」扱いになり任意パラメータが
+    # 最良値として保存され下流へ伝播する。明示的に失敗させる（fail-fast）。
+    probe = evaluate(races, y_start, y_end, DEFAULT_WEIGHTS, DEFAULT_WR_BLEND)
+    if probe["n"] == 0:
+        raise ValueError(
+            f"指定期間 {y_start}-{y_end} に最適化対象の有効レースがありません。"
+        )
+
     study = optuna.create_study(
         direction="maximize", sampler=_make_sampler(method, seed)
     )
@@ -133,6 +141,8 @@ def main() -> None:
     ap.add_argument("--n-trials", type=int, default=1000, help="各手法の試行数")
     ap.add_argument("--seed", type=int, default=42, help="サンプラー乱数シード")
     args = ap.parse_args()
+    if args.n_trials < 1:
+        ap.error("--n-trials は 1 以上を指定してください")
 
     if not DB_PATH.exists():
         logger.error(f"DBファイルが見つかりません: {DB_PATH}")
