@@ -1,9 +1,87 @@
 "use client"
 
-import { RaceData, CATEGORY_COLS, WAKU_COLORS } from '../lib'
+import { useMemo, useState } from 'react'
+import { RaceData, Prediction, CATEGORY_COLS, WAKU_COLORS } from '../lib'
+
+// ソート可能なキー（馬番／オッズ／総合スコア／A〜E のみ。人名系は対象外）
+type SortKey = 'horse_number' | 'odds' | 'total_score' | 'A' | 'B' | 'C' | 'D' | 'E'
+type SortDir = 'asc' | 'desc'
+
+// 各キーの並び替え用の数値を取り出す（カテゴリ未算出・D速度は -1 として末尾寄せ）
+function sortValue(p: Prediction, key: SortKey): number {
+  if (key === 'horse_number') return p.horse_number
+  if (key === 'odds') return p.odds
+  if (key === 'total_score') return p.total_score
+  return p.category_scores[key]?.total ?? -1
+}
+
+// 初回クリック時の既定方向（馬番・オッズは昇順＝小さい順、スコア系は降順＝高い順）
+const DEFAULT_DIR: Record<SortKey, SortDir> = {
+  horse_number: 'asc',
+  odds: 'asc',
+  total_score: 'desc',
+  A: 'desc',
+  B: 'desc',
+  C: 'desc',
+  D: 'desc',
+  E: 'desc',
+}
+
+// ソート可能な見出し（クリックでトグル＋現在のソート列に▲▼表示）
+type SortThProps = {
+  k: SortKey
+  label: string
+  align?: 'left' | 'right'
+  sortKey: SortKey
+  sortDir: SortDir
+  onSort: (key: SortKey) => void
+}
+
+function SortTh({ k, label, align = 'left', sortKey, sortDir, onSort }: SortThProps) {
+  const active = k === sortKey
+  return (
+    <th
+      onClick={() => onSort(k)}
+      className={`px-3 py-3 font-semibold whitespace-nowrap cursor-pointer select-none hover:text-gray-200 ${
+        align === 'right' ? 'text-right' : ''
+      } ${active ? 'text-blue-400' : ''}`}
+      title="クリックで並び替え"
+    >
+      {label}
+      <span className="ml-1 text-[10px]">{active ? (sortDir === 'asc' ? '▲' : '▼') : '↕'}</span>
+    </th>
+  )
+}
 
 // 出馬表＋スコア一覧（TOP画面の表本体）
 export default function ScoreTable({ data, updatedAt }: { data: RaceData; updatedAt: string }) {
+  const [sortKey, setSortKey] = useState<SortKey>('total_score')
+  const [sortDir, setSortDir] = useState<SortDir>('desc')
+
+  const handleSort = (key: SortKey) => {
+    if (key === sortKey) {
+      setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))
+    } else {
+      setSortKey(key)
+      setSortDir(DEFAULT_DIR[key])
+    }
+  }
+
+  const rows = useMemo(() => {
+    const sorted = [...data.predictions]
+    sorted.sort((a, b) => {
+      const aVal = sortValue(a, sortKey)
+      const bVal = sortValue(b, sortKey)
+      // 未算出値（-1）は昇順・降順に関わらず常に末尾へ
+      if (aVal === -1 && bVal === -1) return 0
+      if (aVal === -1) return 1
+      if (bVal === -1) return -1
+      const diff = aVal - bVal
+      return sortDir === 'asc' ? diff : -diff
+    })
+    return sorted
+  }, [data.predictions, sortKey, sortDir])
+
   return (
     <div className="bg-gray-900/50 rounded-xl shadow-2xl overflow-hidden border border-gray-800">
       {/* レース名（新馬戦は競走名が空のことが多いためフォールバック） */}
@@ -11,27 +89,27 @@ export default function ScoreTable({ data, updatedAt }: { data: RaceData; update
         <h2 className="text-lg font-bold text-white">
           {data.race_name?.trim() || '（新馬戦・レース名なし）'}
         </h2>
-        <p className="text-xs text-gray-500 mt-0.5">{data.predictions.length} 頭立て・総合スコア降順</p>
+        <p className="text-xs text-gray-500 mt-0.5">{data.predictions.length} 頭立て・見出しクリックで並び替え</p>
       </div>
 
       <div className="overflow-x-auto">
         <table className="w-full text-left border-collapse text-sm">
           <thead>
             <tr className="bg-gray-900 text-gray-400 text-xs uppercase tracking-wider border-b border-gray-800">
-              <th className="px-3 py-3 font-semibold">枠/馬番</th>
+              <SortTh k="horse_number" label="枠/馬番" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} />
               <th className="px-3 py-3 font-semibold">出走馬</th>
               <th className="px-3 py-3 font-semibold">騎手 / 斤量</th>
               <th className="px-3 py-3 font-semibold">調教師</th>
               <th className="px-3 py-3 font-semibold">馬主 / 生産者</th>
-              <th className="px-3 py-3 font-semibold whitespace-nowrap">オッズ (人気)</th>
-              <th className="px-3 py-3 font-semibold min-w-[180px]">総合スコア</th>
+              <SortTh k="odds" label="オッズ (人気)" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} />
+              <SortTh k="total_score" label="総合スコア" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} />
               {CATEGORY_COLS.map((c) => (
-                <th key={c.key} className="px-2 py-3 font-semibold text-right whitespace-nowrap">{c.label}</th>
+                <SortTh key={c.key} k={c.key} label={c.label} align="right" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} />
               ))}
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-800/60">
-            {data.predictions.map((p) => (
+            {rows.map((p) => (
               <tr key={p.ketto_toroku_bango || p.horse_number} className="transition-colors hover:bg-gray-800/80">
                 {/* 枠（色）+ 馬番 */}
                 <td className="px-3 py-3 whitespace-nowrap">

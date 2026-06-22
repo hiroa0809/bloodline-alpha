@@ -87,6 +87,21 @@ export default function Home() {
 
         {view === 'score' && (
           <>
+            {/* 戻る操作（SPAのためブラウザ戻るは効かない。明示ボタンで遷移） */}
+            <div className="mb-4 flex items-center gap-2">
+              <button
+                onClick={() => setView('dates')}
+                className="text-gray-400 hover:text-white text-sm bg-gray-800 hover:bg-gray-700 px-3 py-1.5 rounded-md transition-colors"
+              >
+                « 開催日選択へ
+              </button>
+              <button
+                onClick={() => setView('races')}
+                className="text-gray-400 hover:text-white text-sm bg-gray-800 hover:bg-gray-700 px-3 py-1.5 rounded-md transition-colors"
+              >
+                ‹ レース選択へ
+              </button>
+            </div>
             {error && (
               <div className="bg-red-500/10 border-l-4 border-red-500 text-red-400 px-4 py-3 rounded mb-6 text-sm">
                 {error}
