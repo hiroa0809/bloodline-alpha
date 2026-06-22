@@ -104,6 +104,7 @@ class AsOfStats:
     """
 
     def __init__(self, threshold: int):
+        """threshold: 母集団に含める最低出走数（ライブの _MIN_STARTS と一致させる）。"""
         self.threshold = threshold
         # year -> {(group_key, item_key): [starts, wins, roinum]}
         self._by_year: dict[int, dict] = defaultdict(
@@ -115,6 +116,7 @@ class AsOfStats:
         self._next_idx = 0
 
     def add(self, group_key, item_key, year: int, won: bool, roinum: float) -> None:
+        """1走分の出走実績を (group_key, item_key, year) の増分として登録する。"""
         cell = self._by_year[year][(group_key, item_key)]
         cell[0] += 1
         if won:

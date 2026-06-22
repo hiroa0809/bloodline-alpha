@@ -213,6 +213,7 @@ def load_race_info(conn: sqlite3.Connection):
 
 
 def build_engines():
+    """6種の as-of 集計エンジン（各しきい値付き）を生成して返す。"""
     return {
         "sire": AsOfStats(THRESHOLDS["sire"]),
         "nicks": AsOfStats(THRESHOLDS["nicks"]),
@@ -450,6 +451,7 @@ def score_all_years(eng: dict, runners_by_year: dict) -> list[tuple]:
 
 
 def create_cache_table(conn: sqlite3.Connection) -> None:
+    """backtest_subscore_cache テーブルを再作成（特徴量カラムは FEAT_COLS から生成）。"""
     conn.execute(f"DROP TABLE IF EXISTS {CACHE_TABLE}")
     feat_defs = ",\n            ".join(f"{c} REAL" for c in FEAT_COLS)
     conn.execute(f"""
@@ -475,6 +477,7 @@ def create_cache_table(conn: sqlite3.Connection) -> None:
 
 
 def write_rows(conn: sqlite3.Connection, rows: list[tuple], now: str) -> None:
+    """前計算した全出走馬の行を backtest_subscore_cache に一括書き込みする。"""
     meta = [
         "race_id",
         "kaisai_nen",
@@ -504,6 +507,7 @@ def write_rows(conn: sqlite3.Connection, rows: list[tuple], now: str) -> None:
 
 
 def main() -> None:
+    """マップ構築→全件走査→年次スコアリング→キャッシュ書き込みを実行するエントリポイント。"""
     global CLEAN_START, CLEAN_END
     ap = argparse.ArgumentParser(description="as-of サブスコア前計算（#B1）")
     ap.add_argument("--start-year", type=int, default=CLEAN_START)
