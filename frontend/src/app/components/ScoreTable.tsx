@@ -27,6 +27,32 @@ const DEFAULT_DIR: Record<SortKey, SortDir> = {
   E: 'desc',
 }
 
+// ソート可能な見出し（クリックでトグル＋現在のソート列に▲▼表示）
+type SortThProps = {
+  k: SortKey
+  label: string
+  align?: 'left' | 'right'
+  sortKey: SortKey
+  sortDir: SortDir
+  onSort: (key: SortKey) => void
+}
+
+function SortTh({ k, label, align = 'left', sortKey, sortDir, onSort }: SortThProps) {
+  const active = k === sortKey
+  return (
+    <th
+      onClick={() => onSort(k)}
+      className={`px-3 py-3 font-semibold whitespace-nowrap cursor-pointer select-none hover:text-gray-200 ${
+        align === 'right' ? 'text-right' : ''
+      } ${active ? 'text-blue-400' : ''}`}
+      title="クリックで並び替え"
+    >
+      {label}
+      <span className="ml-1 text-[10px]">{active ? (sortDir === 'asc' ? '▲' : '▼') : '↕'}</span>
+    </th>
+  )
+}
+
 // 出馬表＋スコア一覧（TOP画面の表本体）
 export default function ScoreTable({ data, updatedAt }: { data: RaceData; updatedAt: string }) {
   const [sortKey, setSortKey] = useState<SortKey>('total_score')
@@ -44,28 +70,17 @@ export default function ScoreTable({ data, updatedAt }: { data: RaceData; update
   const rows = useMemo(() => {
     const sorted = [...data.predictions]
     sorted.sort((a, b) => {
-      const diff = sortValue(a, sortKey) - sortValue(b, sortKey)
+      const aVal = sortValue(a, sortKey)
+      const bVal = sortValue(b, sortKey)
+      // 未算出値（-1）は昇順・降順に関わらず常に末尾へ
+      if (aVal === -1 && bVal === -1) return 0
+      if (aVal === -1) return 1
+      if (bVal === -1) return -1
+      const diff = aVal - bVal
       return sortDir === 'asc' ? diff : -diff
     })
     return sorted
   }, [data.predictions, sortKey, sortDir])
-
-  // ソート可能な見出し（クリックでトグル＋現在のソート列に▲▼表示）
-  const SortTh = ({ k, label, align = 'left' }: { k: SortKey; label: string; align?: 'left' | 'right' }) => {
-    const active = k === sortKey
-    return (
-      <th
-        onClick={() => handleSort(k)}
-        className={`px-3 py-3 font-semibold whitespace-nowrap cursor-pointer select-none hover:text-gray-200 ${
-          align === 'right' ? 'text-right' : ''
-        } ${active ? 'text-blue-400' : ''}`}
-        title="クリックで並び替え"
-      >
-        {label}
-        <span className="ml-1 text-[10px]">{active ? (sortDir === 'asc' ? '▲' : '▼') : '↕'}</span>
-      </th>
-    )
-  }
 
   return (
     <div className="bg-gray-900/50 rounded-xl shadow-2xl overflow-hidden border border-gray-800">
@@ -81,15 +96,15 @@ export default function ScoreTable({ data, updatedAt }: { data: RaceData; update
         <table className="w-full text-left border-collapse text-sm">
           <thead>
             <tr className="bg-gray-900 text-gray-400 text-xs uppercase tracking-wider border-b border-gray-800">
-              <SortTh k="horse_number" label="枠/馬番" />
+              <SortTh k="horse_number" label="枠/馬番" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} />
               <th className="px-3 py-3 font-semibold">出走馬</th>
               <th className="px-3 py-3 font-semibold">騎手 / 斤量</th>
               <th className="px-3 py-3 font-semibold">調教師</th>
               <th className="px-3 py-3 font-semibold">馬主 / 生産者</th>
-              <SortTh k="odds" label="オッズ (人気)" />
-              <SortTh k="total_score" label="総合スコア" />
+              <SortTh k="odds" label="オッズ (人気)" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} />
+              <SortTh k="total_score" label="総合スコア" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} />
               {CATEGORY_COLS.map((c) => (
-                <SortTh key={c.key} k={c.key} label={c.label} align="right" />
+                <SortTh key={c.key} k={c.key} label={c.label} align="right" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} />
               ))}
             </tr>
           </thead>
