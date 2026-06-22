@@ -35,6 +35,9 @@ pgdata/
 # AI指示・プロジェクト戦略ノート（バックテスト方法論・配点思想等の考え方を含む・非公開）
 CLAUDE.md
 
+# タスク管理ノート（非公開・.claude 外へ移動して書込許可プロンプトを回避）
+/TASK_MASTER.md
+
 # データベース（インポーターで再生成可能）
 backend/bloodline.db
 backend/bloodline.db-shm
