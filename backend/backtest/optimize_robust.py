@@ -8,9 +8,9 @@
 
 2つの仕掛け:
   ① 時期間の一貫性を要求するロバスト目的: IS を連続3ブロックに等分し、候補重みを3ブロック
-     全部で採点 → 目的 = mean(block_rois) − std(block_rois) を最大化。ある時期だけ大穴で
-     稼ぐ重みは std ペナルティで負け、どの時期でも安定して良い重みが勝つ（λ=1固定で追加
-     ツマミを作らない）。
+     全部で採点 → 目的 = 加重平均(block_rois) - 加重std(block_rois) を最大化（重みは各
+     ブロックの有効レース数）。ある時期だけ大穴で稼ぐ重みは std ペナルティで負け、どの時期
+     でも安定して良い重みが勝つ（λ=1固定で追加ツマミを作らない）。
   ② 次元圧縮: #B3 で「効く安定信号は B（条件別の父・母父成績）のみ。A/C/E はノイズ拾い」と
      判明。A/C/E のカテゴリ相対重みは DEFAULT 固定（0.65/0.10/0.05）、探索は W_B と
      wr_blend の2次元のみ。2次元は構造的に過学習の自由度がほぼ無い。
@@ -33,7 +33,6 @@ import argparse
 import json
 import logging
 import sqlite3
-import statistics
 import sys
 import time
 from datetime import datetime, timezone
@@ -79,34 +78,57 @@ def build_weights(w_b: float) -> dict:
     return expand_weights({**FIXED_CATS, "B": w_b})
 
 
+def block_sample_counts(races: dict) -> list[int]:
+    """各 IS ブロックの有効レース数（重み非依存・count_bettable_races）。目的の加重に使う。"""
+    return [count_bettable_races(races, s, e) for s, e in IS_BLOCKS]
+
+
 def block_rois(races: dict, weights: dict, wr_blend: float) -> list[float]:
     """各 IS ブロックのスコア1位単勝 ROI を返す。"""
     return [evaluate(races, s, e, weights, wr_blend)["roi"] for s, e in IS_BLOCKS]
 
 
-def robust_objective_value(rois: list[float]) -> float:
-    """ロバスト目的 = mean(block_rois) − std(block_rois)。高くかつ一貫した重みを選ぶ。"""
-    return statistics.mean(rois) - statistics.pstdev(rois)
+def weighted_mean_std(rois: list[float], ns: list[int]) -> tuple[float, float]:
+    """ブロックROIの有効レース数による加重平均と加重標準偏差を返す。
+
+    ブロックごとに有効レース数が異なる（早期ほど多い）ため等重みだと標本数の少ない
+    ブロックの極端値が目的を過度に支配する。robustness.py の加重平均規約に合わせ、
+    平均・分散とも同一の重み系（count_bettable_races）で算出する。
+    """
+    total = sum(ns)
+    mean = sum(r * n for r, n in zip(rois, ns)) / total
+    var = sum(n * (r - mean) ** 2 for r, n in zip(rois, ns)) / total
+    return mean, var**0.5
 
 
-def make_objective(races: dict):
+def robust_objective_value(rois: list[float], ns: list[int]) -> float:
+    """ロバスト目的 = 加重平均(block_rois) - 加重std(block_rois)。高くかつ一貫した重みを選ぶ。"""
+    mean, std = weighted_mean_std(rois, ns)
+    return mean - std
+
+
+def make_objective(races: dict, block_ns: list[int]):
     """W_B / wr_blend の2次元を探索し、ロバスト目的値を返す Optuna 目的関数。"""
 
     def objective(trial: optuna.Trial) -> float:
         w_b = trial.suggest_float("W_B", 0.0, 1.0)
         wr_blend = trial.suggest_float("wr_blend", 0.0, 1.0)
         weights = build_weights(w_b)
-        return robust_objective_value(block_rois(races, weights, wr_blend))
+        return robust_objective_value(block_rois(races, weights, wr_blend), block_ns)
 
     return objective
 
 
-def optimize_robust(races: dict, method: str, n_trials: int, seed: int) -> dict:
+def optimize_robust(
+    races: dict, block_ns: list[int], method: str, n_trials: int, seed: int
+) -> dict:
     """指定手法でロバスト目的を最大化し、最良の W_B / wr_blend / 目的値を返す。"""
     study = optuna.create_study(
         direction="maximize", sampler=_make_sampler(method, seed)
     )
-    study.optimize(make_objective(races), n_trials=n_trials, show_progress_bar=False)
+    study.optimize(
+        make_objective(races, block_ns), n_trials=n_trials, show_progress_bar=False
+    )
     return {
         "value": study.best_value,
         "W_B": study.best_params["W_B"],
@@ -114,16 +136,17 @@ def optimize_robust(races: dict, method: str, n_trials: int, seed: int) -> dict:
     }
 
 
-def summarize(races: dict, weights: dict, wr_blend: float) -> dict:
+def summarize(races: dict, weights: dict, wr_blend: float, block_ns: list[int]) -> dict:
     """重みの full-IS ROI / per-block ROI / ロバスト目的値をまとめる（レポート用）。"""
     rois = block_rois(races, weights, wr_blend)
     full = evaluate(races, IS_START, IS_END, weights, wr_blend)
+    mean, std = weighted_mean_std(rois, block_ns)
     return {
         "full_is_roi": full["roi"],
         "full_is_hit": full["hit"],
         "block_rois": rois,
-        "block_std": statistics.pstdev(rois),
-        "robust_obj": robust_objective_value(rois),
+        "block_std": std,
+        "robust_obj": mean - std,
     }
 
 
@@ -159,22 +182,24 @@ def main() -> None:
     finally:
         conn.close()
 
-    # 各ブロックに有効レースが無いと ROI=0 が紛れ込み目的を歪めるため fail-fast。
-    for s, e in IS_BLOCKS:
-        if count_bettable_races(races, s, e) == 0:
+    # 各ブロックの有効レース数（重み非依存）を一度だけ計算し、目的の加重に使い回す。
+    # 有効レース0のブロックがあると ROI=0 が紛れ込み目的を歪めるため fail-fast。
+    block_ns = block_sample_counts(races)
+    for (s, e), n in zip(IS_BLOCKS, block_ns):
+        if n == 0:
             logger.error(f"ブロック {s}-{e} に有効レースがありません。")
             sys.exit(1)
 
     logger.info(
         f"=== #B5 Stage B ロバストROI最適化（IS {IS_START}-{IS_END}・OOS封印） ==="
     )
-    baseline = summarize(races, DEFAULT_WEIGHTS, DEFAULT_WR_BLEND)
+    baseline = summarize(races, DEFAULT_WEIGHTS, DEFAULT_WR_BLEND, block_ns)
     _log_summary("ベースライン（ライブ既定重み）", baseline)
 
     results: dict = {}
     for method in ("GA", "TPE"):
         t0 = time.time()
-        res = optimize_robust(races, method, args.n_trials, args.seed)
+        res = optimize_robust(races, block_ns, method, args.n_trials, args.seed)
         results[method] = res
         logger.info(
             f"  {method}: best ロバスト目的 {res['value'] * 100:.2f} "
@@ -186,7 +211,7 @@ def main() -> None:
     winner_name = max(results, key=lambda k: results[k]["value"])
     winner = results[winner_name]
     weights = build_weights(winner["W_B"])
-    best = summarize(races, weights, winner["wr_blend"])
+    best = summarize(races, weights, winner["wr_blend"], block_ns)
 
     logger.info("=== 結果 ===")
     logger.info(f"採用手法: {winner_name}")
@@ -203,7 +228,8 @@ def main() -> None:
         "method": winner_name,
         "is_period": [IS_START, IS_END],
         "is_blocks": IS_BLOCKS,
-        "objective": "mean(block_roi) - std(block_roi)",
+        "block_sample_counts": block_ns,
+        "objective": "weighted_mean(block_roi) - weighted_std(block_roi) [race-count weighted]",
         "search_dims": ["W_B", "wr_blend"],
         "fixed_category_weights": FIXED_CATS,
         "best": {
