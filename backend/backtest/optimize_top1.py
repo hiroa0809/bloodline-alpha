@@ -18,8 +18,8 @@
     `test_top1_core.py` のゴールデンテストで検証済み。1 試行 15 万回の関数呼び出しを行列演算
     1 発に畳み込み、20,000 試行を現実的な時間で回す。
   - 進捗出力: 各 study で一定試行ごとに best 値と経過秒をログ。
-  - resume: Optuna の sqlite ストレージ（top1_optuna.db）に study 単位で永続化。意図しない停止後、
-    同一引数で再実行すると完了済み試行をスキップして途中から再開する。
+  - resume: Optuna は in-memory で実行し、完了済み study を top1_checkpoint.json に保存。意図しない
+    停止後、同一引数で再実行すると完了済み study はスキップし、未完了 study は先頭から再実行する。
 
 金庫ルール厳守:
   - 学習・手法/道の優劣判定は IS（1993-2013）限定。OOS-1〜3 は一切評価しない（封印）。
@@ -124,12 +124,12 @@ def top1_loglik(
     for runners in _iter_races(races, year_start, year_end):
         scores = [compute_score(r, weights, wr_blend) for r in runners]
         mx = max(scores)
-        exps = [math.exp(beta * (s - mx)) for s in scores]
-        denom = sum(exps)
-        winners = [e for r, e in zip(runners, exps) if r["won"] == 1]
+        zs = [beta * (s - mx) for s in scores]
+        log_denom = math.log(sum(math.exp(z) for z in zs))
+        winners = [z for r, z in zip(runners, zs) if r["won"] == 1]
         if not winners:
             continue
-        total += sum(math.log(e / denom) for e in winners) / len(winners)
+        total += sum(z - log_denom for z in winners) / len(winners)
         n += 1
     return total / n if n else -math.inf
 
@@ -176,9 +176,11 @@ def _load_checkpoint() -> dict:
 
 
 def _save_checkpoint(ckpt: dict) -> None:
-    CHECKPOINT_PATH.write_text(
-        json.dumps(ckpt, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    # 保存中の中断で checkpoint が壊れ resume 不能になるのを防ぐ（tmp→replace の atomic write）。
+    payload = json.dumps(ckpt, ensure_ascii=False, indent=2)
+    tmp = CHECKPOINT_PATH.with_suffix(f"{CHECKPOINT_PATH.suffix}.tmp")
+    tmp.write_text(payload, encoding="utf-8")
+    tmp.replace(CHECKPOINT_PATH)
 
 
 def optimize_range(
@@ -198,8 +200,9 @@ def optimize_range(
     （study 単位 resume。numpy の高速化を活かすため storage I/O は使わない）。
     共通指標（道A 一致率）でも採点して返し、道A/道B・GA/TPE を同じ土俵で比較する。
     """
-    key = f"{route}__{scope}__{method}__s{seed}__n{n_trials}"
-    label = f"{route}/{scope}/{method}"
+    range_key = f"{y_start}-{y_end}"
+    key = f"{route}__{scope}__{range_key}__{method}__s{seed}__n{n_trials}"
+    label = f"{route}/{scope}/{range_key}/{method}"
     if key in ckpt:
         logger.info(f"    [{label}] checkpoint から復元（スキップ）")
         return ckpt[key]

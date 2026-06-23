@@ -101,7 +101,9 @@ def load_arrays(conn: sqlite3.Connection) -> dict:
         a["race_year"] = np.array([], dtype=np.int64)
         a["N"], a["R"] = 0, 0
         return a
-    change = rid[1:] != rid[:-1]
+    # ソートキー (as_of_year, race_id) と境界キーを一致させる。race_id は16桁で年を含み
+    # 一意のため現状 race_id だけでも割れないが、両キーで判定し将来の取り違えを防ぐ。
+    change = (year[1:] != year[:-1]) | (rid[1:] != rid[:-1])
     starts = np.concatenate(([0], np.nonzero(change)[0] + 1, [n])).astype(np.int64)
     a["race_start"] = starts
     a["race_year"] = year[starts[:-1]]
@@ -188,9 +190,10 @@ def top1_loglik(
     won = a["won"][h0:h1]
     race_max = np.maximum.reduceat(sc, seg)
     max_per_head = np.repeat(race_max, counts)
-    ex = np.exp(beta * (sc - max_per_head))  # max 減算で数値安定化
-    denom_per_head = np.repeat(np.add.reduceat(ex, seg), counts)
-    logp = np.where(won == 1, np.log(ex / denom_per_head), 0.0)
+    z = beta * (sc - max_per_head)  # max 減算で exp の overflow を回避
+    denom_per_head = np.repeat(np.add.reduceat(np.exp(z), seg), counts)
+    # log-domain で計算（ex/denom だと勝馬 exp が underflow し有限な対数尤度が -inf に潰れる）。
+    logp = np.where(won == 1, z - np.log(denom_per_head), 0.0)
     sum_logp = np.add.reduceat(logp, seg)
     nwin = np.add.reduceat((won == 1).astype(np.int64), seg)
     valid = nwin > 0
