@@ -50,6 +50,7 @@ backend/logs/
 backend/backtest/best_weights.json
 backend/backtest/robustness_report.json
 backend/backtest/robustness_checkpoint.json
+backend/backtest/odds_band_report.json
 
 # 設計資料・JV-Data仕様書（非公開・JRA-VAN配布分は再DL可能）
 docs/vdata_spec/
