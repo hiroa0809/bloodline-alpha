@@ -77,6 +77,11 @@ SUBS = list(DEFAULT_WEIGHTS.keys())
 # 道Bの softmax 温度βの探索範囲。
 BETA_LOW, BETA_HIGH = 0.5, 20.0
 
+# TPE は履歴からのサンプリングが試行数とともに重くなる（O(n)超）一方、ベイズ最適化として
+# 少試行で収束する。GA（線形・多試行向き）と試行数を分け、TPE は上限でキャップして全 study を
+# 一晩で完了させる（CLAUDE.md「TPE は各300〜500試行で収束」と整合・収束は実測でも頭打ち）。
+TPE_MAX_TRIALS = 5000
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -246,9 +251,15 @@ def optimize_best(
     seed: int,
     ckpt: dict,
 ) -> dict:
-    """GA/TPE を両方回し、学習区間の Top-1 一致率で良い方を採用（金庫: 学習区間で完結）。"""
+    """GA/TPE を両方回し、学習区間の Top-1 一致率で良い方を採用（金庫: 学習区間で完結）。
+
+    GA は n_trials、TPE は TPE_MAX_TRIALS 上限（TPE は少試行で収束し多試行は重いだけのため）。
+    """
+    trials_by_method = {"GA": n_trials, "TPE": min(n_trials, TPE_MAX_TRIALS)}
     cands = {
-        m: optimize_range(arrays, y_start, y_end, route, scope, m, n_trials, seed, ckpt)
+        m: optimize_range(
+            arrays, y_start, y_end, route, scope, m, trials_by_method[m], seed, ckpt
+        )
         for m in ("GA", "TPE")
     }
     method = max(cands, key=lambda m: cands[m]["match_rate"])
