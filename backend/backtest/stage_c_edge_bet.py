@@ -169,8 +169,10 @@ def fit_beta(races: list[Race], ys: int, ye: int) -> float:
             grad += r.scores[r.winner] - mean
             var = sum(pi * (s - mean) ** 2 for pi, s in zip(p, r.scores))
             hess -= var
-        if hess == 0.0:  # どのレースも分散ゼロ＝スコアに識別力なし
-            return 0.0
+        if hess == 0.0:
+            # 初回(β=0)で全レース分散ゼロ＝識別力なし→一様(β=0)。学習途中で分散が
+            # アンダーフローした場合は学習済み β を温存する（0 に潰すと校正が無音で無効化）。
+            return beta
         step = grad / hess  # ニュートン: β -= LL'/LL''（hess<0 で上昇方向）
         beta -= step
         if abs(step) < 1e-8:
