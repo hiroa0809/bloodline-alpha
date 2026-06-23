@@ -46,6 +46,11 @@ backend/bloodline.db-wal
 # ログファイル
 backend/logs/
 
+# バックテスト最適化の生成物（最適配点＝スコアリング戦略を含む・非公開・再生成可能）
+backend/backtest/best_weights.json
+backend/backtest/robustness_report.json
+backend/backtest/robustness_checkpoint.json
+
 # 設計資料・JV-Data仕様書（非公開・JRA-VAN配布分は再DL可能）
 docs/vdata_spec/
 docs/ui_screen_design.md
