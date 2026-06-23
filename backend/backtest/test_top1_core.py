@@ -33,6 +33,44 @@ DB = _BD / "bloodline.db"
 SCORE_TOL = 1e-9
 
 
+def _synthetic(races_data: list) -> tuple[dict, np.ndarray]:
+    """(scores, won) のレース列から最小 arrays と scores 配列を作る（決定論的 edge テスト用）。"""
+    scores: list = []
+    won: list = []
+    starts = [0]
+    for sc_list, won_list in races_data:
+        scores += sc_list
+        won += won_list
+        starts.append(len(scores))
+    a = {
+        "won": np.array(won, dtype=np.int64),
+        "ninki": np.zeros(len(scores), dtype=np.int64),
+        "race_start": np.array(starts, dtype=np.int64),
+        "race_year": np.array([2000] * (len(starts) - 1), dtype=np.int64),
+        "N": len(scores),
+        "R": len(starts) - 1,
+    }
+    return a, np.array(scores, dtype=np.float64)
+
+
+def check_edge_cases() -> None:
+    """同点1位・勝者不在・極端βの分岐を決定論的に踏む（実DB＋乱数では確実に踏めない）。"""
+    # 同点1位(2頭)→不一致 / 明確1位=1着→一致 ⇒ rate 0.5
+    a, sc = _synthetic([([1.0, 1.0, 0.5], [1, 0, 0]), ([0.9, 0.2, 0.1], [1, 0, 0])])
+    rate, n = core.top1_match_rate(a, sc, 2000, 2000)
+    assert n == 2 and abs(rate - 0.5) < 1e-12, f"tie分岐: rate={rate} n={n}"
+    # 勝者不在レースは loglik 分母から除外（勝者ありレースのみ計上）
+    a2, sc2 = _synthetic([([0.5, 0.3], [0, 0]), ([0.8, 0.1], [1, 0])])
+    assert math.isfinite(core.top1_loglik(a2, sc2, 2000, 2000, 1.0))
+    # 勝者が最高スコアでない＋極端β: log-domain なら finite（旧 ex/denom は -inf に潰れる）
+    a3, sc3 = _synthetic([([0.1, 0.8], [1, 0])])
+    ll = core.top1_loglik(a3, sc3, 2000, 2000, 1e3)
+    assert math.isfinite(ll), f"underflow で -inf 潰れ: ll={ll}"
+    print(
+        f"✅ EDGE OK: tie/no-winner/large-β 分岐を確認（underflowケース ll={ll:.3f}）"
+    )
+
+
 def main() -> None:
     conn = sqlite3.connect(str(DB))
     conn.row_factory = sqlite3.Row
@@ -97,6 +135,7 @@ def main() -> None:
     assert max_match_diff < 1e-9, "一致率が pure と不一致！"
     assert max_loglik_diff < 1e-9, "対数尤度が pure と不一致！"
     print("✅ GOLDEN OK: numpy 版は pure-Python と一致（スコア/一致率/対数尤度）")
+    check_edge_cases()
 
 
 if __name__ == "__main__":
