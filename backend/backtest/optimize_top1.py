@@ -13,12 +13,18 @@
   道B loglik : 各レースで1着馬に softmax(β*score) が与える確率の平均対数尤度を最大化
                （Top-1 の滑らかな近似・探索が安定）。検証は道A同様の一致率で採点し同じ土俵で比較。
 
+高速化・運用:
+  - スコア計算は `top1_core`（numpy ベクトル化）。pure-Python の compute_score と全頭一致を
+    `test_top1_core.py` のゴールデンテストで検証済み。1 試行 15 万回の関数呼び出しを行列演算
+    1 発に畳み込み、20,000 試行を現実的な時間で回す。
+  - 進捗出力: 各 study で一定試行ごとに best 値と経過秒をログ。
+  - resume: Optuna の sqlite ストレージ（top1_optuna.db）に study 単位で永続化。意図しない停止後、
+    同一引数で再実行すると完了済み試行をスキップして途中から再開する。
+
 金庫ルール厳守:
   - 学習・手法/道の優劣判定は IS（1993-2013）限定。OOS-1〜3 は一切評価しない（封印）。
-  - サブスコアは #B1 as-of キャッシュ（リーク無し）。14 重みは各 0〜1 で自由探索（総合スコアは
-    重みに線形＝賭けは argmax でスケール不変、効くのは相対比のみ。道B のみ温度βを別途持つ）。
-  - 採否は IS の一致率でなく IS内ウォークフォワードCV（3分割）の検証一致率で判定する
-    （#B3 が IS だけ見て過学習した轍を踏まない）。被覆レース数で加重平均＝過学習補正後の実力。
+  - サブスコアは #B1 as-of キャッシュ（リーク無し）。14 重みは各 0〜1 で自由探索（道Bのみ温度β）。
+  - 採否は IS の一致率でなく IS内ウォークフォワードCV（3分割）の検証一致率で判定。
 
 使い方:
     python backend/backtest/optimize_top1.py                  # 本番（GA/TPE 各1000試行）
@@ -42,23 +48,23 @@ import optuna
 _BACKEND_DIR = Path(__file__).resolve().parent.parent
 if str(_BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(_BACKEND_DIR))
+from backtest import top1_core as core  # noqa: E402
 from backtest.optimize_weights import _make_sampler  # noqa: E402
 from backtest.run_backtest import (  # noqa: E402
     DEFAULT_WEIGHTS,
     DEFAULT_WR_BLEND,
     compute_score,
-    load_races,
 )
 
 DB_PATH = _BACKEND_DIR / "bloodline.db"
 REPORT_PATH = _BACKEND_DIR / "backtest" / "top1_report.json"
 WEIGHTS_PATH = _BACKEND_DIR / "backtest" / "top1_weights.json"
+CHECKPOINT_PATH = _BACKEND_DIR / "backtest" / "top1_checkpoint.json"
 
 # IS 区間（CLAUDE.md「バックテスト方法論」）。OOS はここで触らない（金庫ルール）。
 IS_START, IS_END = 1993, 2013
 
 # IS内ウォークフォワードCV分割（robustness / analyze_odds_bands / stage_c と同一値）。
-# (学習開始, 学習終了, 検証開始, 検証終了)
 CV_FOLDS = [
     (1993, 2005, 2006, 2008),
     (1993, 2008, 2009, 2011),
@@ -68,7 +74,7 @@ CV_FOLDS = [
 # 14 サブ項目（ライブ既定の重みキー順）。
 SUBS = list(DEFAULT_WEIGHTS.keys())
 
-# 道Bの softmax 温度βの探索範囲（重みが各0〜1で最大スコアが小さいため温度で鋭さを調整）。
+# 道Bの softmax 温度βの探索範囲。
 BETA_LOW, BETA_HIGH = 0.5, 20.0
 
 logging.basicConfig(
@@ -80,8 +86,10 @@ logger = logging.getLogger(__name__)
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 
 
+# ============================================================
+# pure-Python 実装（ゴールデン照合の「正解」。最適化は numpy core を使う）
+# ============================================================
 def _iter_races(races: dict, year_start: int, year_end: int):
-    """指定年範囲（as_of_year）のレース runners を順に返す。"""
     for runners in races.values():
         if year_start <= runners[0]["as_of_year"] <= year_end:
             yield runners
@@ -90,12 +98,7 @@ def _iter_races(races: dict, year_start: int, year_end: int):
 def top1_match_rate(
     races: dict, year_start: int, year_end: int, weights: dict, wr_blend: float
 ) -> tuple[float, int]:
-    """道A: Top-1 一致率と分母レース数を返す。
-
-    各レースで最高スコアの馬を取り、それが「ちょうど1頭」かつ「1着(won==1)」なら一致(1)。
-    同点1位が2頭以上のレースは不一致(0)＝賭ける1頭を一意に決められない＝実運用で賭けられない。
-    分母は年範囲の全レース（同点レースも分母に残すので全馬同点の水増しは一致率0に潰れる）。
-    """
+    """道A の pure 実装。最高スコアが1頭でそれが1着なら一致。同点1位2頭以上は不一致。"""
     n = match = 0
     for runners in _iter_races(races, year_start, year_end):
         scores = [compute_score(r, weights, wr_blend) for r in runners]
@@ -115,16 +118,13 @@ def top1_loglik(
     wr_blend: float,
     beta: float,
 ) -> float:
-    """道B: 各レースで1着馬に softmax(β*score) が与える確率の平均対数尤度（最大化対象）。
-
-    1着が複数（同着）のレースは各勝者の対数確率を平均。1着不在のレースは分母から除外。
-    """
+    """道B の pure 実装。各レースで1着馬の softmax(β*score) 平均対数尤度。"""
     total = 0.0
     n = 0
     for runners in _iter_races(races, year_start, year_end):
         scores = [compute_score(r, weights, wr_blend) for r in runners]
         mx = max(scores)
-        exps = [math.exp(beta * (s - mx)) for s in scores]  # mx 減算で数値安定化
+        exps = [math.exp(beta * (s - mx)) for s in scores]
         denom = sum(exps)
         winners = [e for r, e in zip(runners, exps) if r["won"] == 1]
         if not winners:
@@ -134,86 +134,134 @@ def top1_loglik(
     return total / n if n else -math.inf
 
 
-def _suggest_weights(trial: optuna.Trial) -> dict:
-    """14 サブ重みを各 0〜1 で提案する。"""
-    return {s: trial.suggest_float(s, 0.0, 1.0) for s in SUBS}
-
-
-def make_objective(races: dict, y_start: int, y_end: int, route: str):
-    """route="direct"(道A: 一致率) / "loglik"(道B: 対数尤度) の Optuna 目的関数を生成。"""
+# ============================================================
+# numpy 最適化コア（高速・resume・進捗）
+# ============================================================
+def make_objective(arrays: dict, y_start: int, y_end: int, route: str):
+    """route="direct"(道A: 一致率) / "loglik"(道B: 対数尤度) の Optuna 目的関数。"""
 
     def objective(trial: optuna.Trial) -> float:
-        weights = _suggest_weights(trial)
+        weights = {s: trial.suggest_float(s, 0.0, 1.0) for s in SUBS}
         wr_blend = trial.suggest_float("wr_blend", 0.0, 1.0)
+        scores = core.score_all(arrays, weights, wr_blend)
         if route == "direct":
-            return top1_match_rate(races, y_start, y_end, weights, wr_blend)[0]
+            return core.top1_match_rate(arrays, scores, y_start, y_end)[0]
         beta = trial.suggest_float("beta", BETA_LOW, BETA_HIGH)
-        return top1_loglik(races, y_start, y_end, weights, wr_blend, beta)
+        return core.top1_loglik(arrays, scores, y_start, y_end, beta)
 
     return objective
 
 
 def _params_to_weights(params: dict) -> tuple[dict, float, float | None]:
-    """study.best_params → (14重み, wr_blend, beta or None)。"""
     weights = {s: params[s] for s in SUBS}
     return weights, params["wr_blend"], params.get("beta")
 
 
+def _make_progress(label: str, t0: float, every: int):
+    def callback(study: optuna.Study, trial: optuna.trial.FrozenTrial) -> None:
+        done = trial.number + 1
+        if done % every == 0:
+            logger.info(
+                f"    [{label}] {done}試行 best={study.best_value:.4f} "
+                f"({time.time() - t0:.0f}s)"
+            )
+
+    return callback
+
+
+def _load_checkpoint() -> dict:
+    if CHECKPOINT_PATH.exists():
+        return json.loads(CHECKPOINT_PATH.read_text(encoding="utf-8"))
+    return {}
+
+
+def _save_checkpoint(ckpt: dict) -> None:
+    CHECKPOINT_PATH.write_text(
+        json.dumps(ckpt, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+
 def optimize_range(
-    races: dict,
+    arrays: dict,
     y_start: int,
     y_end: int,
     route: str,
+    scope: str,
     method: str,
     n_trials: int,
     seed: int,
+    ckpt: dict,
 ) -> dict:
-    """指定年範囲で route の目的を最大化。得た重みを共通指標（道A一致率）でも採点して返す。"""
+    """1 study（route×scope×method）を in-memory で n_trials 回し、最良を返す。
+
+    完了結果は checkpoint に保存し、再実行時に同一 study があれば再計算せず復元する
+    （study 単位 resume。numpy の高速化を活かすため storage I/O は使わない）。
+    共通指標（道A 一致率）でも採点して返し、道A/道B・GA/TPE を同じ土俵で比較する。
+    """
+    key = f"{route}__{scope}__{method}__s{seed}__n{n_trials}"
+    label = f"{route}/{scope}/{method}"
+    if key in ckpt:
+        logger.info(f"    [{label}] checkpoint から復元（スキップ）")
+        return ckpt[key]
     study = optuna.create_study(
         direction="maximize", sampler=_make_sampler(method, seed)
     )
+    t0 = time.time()
     study.optimize(
-        make_objective(races, y_start, y_end, route),
+        make_objective(arrays, y_start, y_end, route),
         n_trials=n_trials,
-        show_progress_bar=False,
+        callbacks=[_make_progress(label, t0, max(1, n_trials // 20))],
     )
     weights, wr_blend, beta = _params_to_weights(study.best_params)
-    match_rate, n = top1_match_rate(races, y_start, y_end, weights, wr_blend)
-    return {
+    match_rate, n = core.top1_match_rate(
+        arrays, core.score_all(arrays, weights, wr_blend), y_start, y_end
+    )
+    res = {
         "objective_value": study.best_value,
-        "match_rate": match_rate,  # 共通指標（道A/道B を同じ土俵で比較）
+        "match_rate": match_rate,
         "n": n,
         "weights": weights,
         "wr_blend": wr_blend,
         "beta": beta,
+        "method": method,
     }
-
-
-def optimize_best(
-    races: dict, y_start: int, y_end: int, route: str, n_trials: int, seed: int
-) -> dict:
-    """GA/TPE を両方回し、学習区間の Top-1 一致率で良い方を採用（金庫: 学習区間で完結）。"""
-    cands = {
-        m: optimize_range(races, y_start, y_end, route, m, n_trials, seed)
-        for m in ("GA", "TPE")
-    }
-    method = max(cands, key=lambda m: cands[m]["match_rate"])
-    res = dict(cands[method])
-    res["method"] = method
+    ckpt[key] = res
+    _save_checkpoint(ckpt)
+    logger.info(
+        f"    [{label}] 完了 {n_trials}試行 ({time.time() - t0:.0f}s)・checkpoint保存"
+    )
     return res
 
 
-def eval_cv(races: dict, route: str, n_trials: int, seed: int) -> dict:
-    """IS内ウォークフォワードCV: 各 fold の学習区間で最適化→検証区間で一致率を採点。
+def optimize_best(
+    arrays: dict,
+    y_start: int,
+    y_end: int,
+    route: str,
+    scope: str,
+    n_trials: int,
+    seed: int,
+    ckpt: dict,
+) -> dict:
+    """GA/TPE を両方回し、学習区間の Top-1 一致率で良い方を採用（金庫: 学習区間で完結）。"""
+    cands = {
+        m: optimize_range(arrays, y_start, y_end, route, scope, m, n_trials, seed, ckpt)
+        for m in ("GA", "TPE")
+    }
+    method = max(cands, key=lambda m: cands[m]["match_rate"])
+    return cands[method]
 
-    検証一致率を検証レース数で加重平均＝過学習補正後の実力見積もり。
-    """
+
+def eval_cv(arrays: dict, route: str, n_trials: int, seed: int, ckpt: dict) -> dict:
+    """IS内ウォークフォワードCV: 各 fold の学習区間で最適化→検証区間で一致率を採点。"""
     folds = []
     val_sum = 0.0
     val_n = 0
-    for ls, le, vs, ve in CV_FOLDS:
-        fit = optimize_best(races, ls, le, route, n_trials, seed)
-        val_rate, vn = top1_match_rate(races, vs, ve, fit["weights"], fit["wr_blend"])
+    for i, (ls, le, vs, ve) in enumerate(CV_FOLDS):
+        fit = optimize_best(arrays, ls, le, route, f"fold{i}", n_trials, seed, ckpt)
+        val_rate, vn = core.top1_match_rate(
+            arrays, core.score_all(arrays, fit["weights"], fit["wr_blend"]), vs, ve
+        )
         folds.append(
             {
                 "train": [ls, le],
@@ -240,23 +288,19 @@ def eval_cv(races: dict, route: str, n_trials: int, seed: int) -> dict:
     }
 
 
-def baseline_rates(races: dict, y_start: int, y_end: int) -> dict:
-    """参照ベースライン: 手置き既定重みの Top-1 一致率 / 1番人気の的中率（市場の Top-1）。"""
-    base_rate, n = top1_match_rate(
-        races, y_start, y_end, DEFAULT_WEIGHTS, DEFAULT_WR_BLEND
+def baseline_rates(arrays: dict) -> dict:
+    """参照ベースライン: 既定重みの Top-1 一致率 / 1番人気の的中率（市場の Top-1）。"""
+    base_rate, n = core.top1_match_rate(
+        arrays,
+        core.score_all(arrays, DEFAULT_WEIGHTS, DEFAULT_WR_BLEND),
+        IS_START,
+        IS_END,
     )
-    fav_n = fav_win = 0
-    for runners in _iter_races(races, y_start, y_end):
-        fav = next((r for r in runners if r["ninki"] == 1), None)
-        if fav is None:
-            continue
-        fav_n += 1
-        if fav["won"] == 1:
-            fav_win += 1
+    fav_rate, fav_n = core.favorite_match_rate(arrays, IS_START, IS_END)
     return {
         "default_weight_match_rate": base_rate,
         "default_weight_n": n,
-        "favorite_match_rate": fav_win / fav_n if fav_n else 0.0,
+        "favorite_match_rate": fav_rate,
         "favorite_n": fav_n,
     }
 
@@ -276,11 +320,15 @@ def main() -> None:
 
     conn = sqlite3.connect(str(DB_PATH), timeout=120)
     try:
-        races = load_races(conn)
+        arrays = core.load_arrays(conn)
     finally:
         conn.close()
+    logger.info(f"対象: {arrays['N']:,} 頭 / {arrays['R']:,} レース")
 
-    base = baseline_rates(races, IS_START, IS_END)
+    ckpt = _load_checkpoint()
+    if ckpt:
+        logger.info(f"checkpoint 復元: {len(ckpt)} study 完了済み（再開）")
+    base = baseline_rates(arrays)
     logger.info(f"=== Top-1 教師あり最適化（IS {IS_START}-{IS_END}・OOS封印） ===")
     logger.info(
         f"参照: 既定重み Top-1 一致 {base['default_weight_match_rate'] * 100:.2f}% / "
@@ -288,18 +336,20 @@ def main() -> None:
     )
 
     routes = {}
-    for route, label in (("direct", "道A 一致件数"), ("loglik", "道B 対数尤度")):
+    for route, rlabel in (("direct", "道A 一致件数"), ("loglik", "道B 対数尤度")):
         logger.info(
-            f"--- {label}: full-IS 最適化（GA/TPE 各 {args.n_trials} 試行） ---"
+            f"--- {rlabel}: full-IS 最適化（GA/TPE 各 {args.n_trials} 試行） ---"
         )
         t0 = time.time()
-        full = optimize_best(races, IS_START, IS_END, route, args.n_trials, args.seed)
+        full = optimize_best(
+            arrays, IS_START, IS_END, route, "fullIS", args.n_trials, args.seed, ckpt
+        )
         logger.info(
             f"  採用 {full['method']} / full-IS Top-1 一致 "
             f"{full['match_rate'] * 100:.2f}% ({time.time() - t0:.0f}秒)"
         )
-        logger.info(f"--- {label}: IS内CV（過学習チェック） ---")
-        cv = eval_cv(races, route, args.n_trials, args.seed)
+        logger.info(f"--- {rlabel}: IS内CV（過学習チェック） ---")
+        cv = eval_cv(arrays, route, args.n_trials, args.seed, ckpt)
         logger.info(
             f"  → 検証(未見)一致率 加重平均 {cv['weighted_valid_match_rate'] * 100:.2f}% "
             f"（実力見積もり・総検証N={cv['total_valid_n']}）"
@@ -345,6 +395,7 @@ def main() -> None:
         f"採用重み保存: {WEIGHTS_PATH}（採用道={best_route} "
         f"CV検証一致 {routes[best_route]['cv']['weighted_valid_match_rate'] * 100:.2f}%）"
     )
+    CHECKPOINT_PATH.unlink(missing_ok=True)  # 全完了＝checkpoint不要
 
 
 if __name__ == "__main__":
