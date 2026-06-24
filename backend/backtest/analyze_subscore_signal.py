@@ -336,7 +336,10 @@ def _consistency_blocks(y0: int, y1: int) -> list[tuple[int, int]]:
     潰れる（CodeRabbit PR#13 指摘反映）。
     """
     fit = [b for b in IS_BLOCKS if y0 <= b[0] and b[1] <= y1]
-    if fit:
+    # IS_BLOCKS が全て収まる範囲（＝full-IS 相当）のときだけ事前登録ブロックを使う。
+    # 一部だけ収まる部分範囲では 1〜2 ブロックに弱体化するため必ず3分割し直す
+    # （3ブロック一貫ゲートの意図を全範囲で保つ。CodeRabbit PR#13 2巡目指摘反映）。
+    if len(fit) == len(IS_BLOCKS):
         return fit
     if y1 <= y0 or (y1 - y0 + 1) < 3:
         return [(y0, y1)]
@@ -451,7 +454,7 @@ def analyze(
         "odds_ratio": odds_ratio,
         "auc_min": auc_min,
         "wr_blend": wr_blend,
-        "is_blocks": IS_BLOCKS,
+        "is_blocks": [list(b) for b, _ in block_idx],
         "market_reference": {"pooled_auc": market_pooled, "blocks": market_blocks},
         "dimensions": results,
         "created_at": datetime.now(timezone.utc).isoformat(),
