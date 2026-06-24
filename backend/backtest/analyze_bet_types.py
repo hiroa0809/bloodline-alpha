@@ -34,7 +34,6 @@ import argparse
 import ast
 import json
 import logging
-import math
 import sqlite3
 import sys
 from datetime import datetime, timezone
@@ -104,13 +103,20 @@ def _race_id(nen, tsukihi, keibajo, kai, nichime, rbango) -> str:
     return f"{nen}{tsukihi}{keibajo}{kai}{nichime}{rbango}"
 
 
-def _loads(s: str) -> list:
+def _loads(s: str | None) -> list:
     """払戻列をリスト化。DB は Python repr（シングルクォート）格納だが将来の json.dumps
-    再インポートにも備え、json を試し失敗時 ast.literal_eval にフォールバックする。"""
+    再インポートにも備え、json を試し失敗時 ast.literal_eval にフォールバックする。
+    None / "null" / 非list は空リストに正規化する（非発売・異常値で落ちないように）。"""
+    if not s:
+        return []
     try:
-        return json.loads(s)
+        parsed = json.loads(s)
     except (json.JSONDecodeError, TypeError):
-        return ast.literal_eval(s)
+        try:
+            parsed = ast.literal_eval(s)
+        except (SyntaxError, ValueError, TypeError):
+            return []
+    return parsed if isinstance(parsed, list) else []
 
 
 def _parse_single(js: str) -> list[tuple[frozenset, float]]:
@@ -256,9 +262,9 @@ def _eval_race(kind: str, order: list[int], n: int, wins: list, waku: dict | Non
     elif kind == "triple":  # 3連複: C(N,3)
         bet = {frozenset(c) for c in combinations(box, 3)}
     elif kind == "bracket":  # 枠連: 上位の枠から枠ペア（同枠は2頭以上で成立）
-        if waku is None:
-            return None
-        brs = [waku[u] for u in box if u in waku]
+        if waku is None or any(u not in waku for u in box):
+            return None  # 上位N頭の枠番が揃わない＝意図したボックスを作れず賭け不能
+        brs = [waku[u] for u in box]
         bet = {frozenset(c) for c in combinations(set(brs), 2)}
         for b in set(brs):
             if brs.count(b) >= 2:
@@ -379,8 +385,9 @@ def run_part2(picks: dict, payoffs: dict, wakuban: dict, min_n: int) -> dict:
             t_stake_w += tr["stake"]
             t_ret_w += tr["ret"]
             used_folds += 1
-        roi_v = v_ret / v_stake if v_stake else float("nan")
-        roi_t = t_ret_w / t_stake_w if t_stake_w else float("nan")
+        # データ無しは NaN でなく None（NaN は標準JSON外。出力は allow_nan=False で検出）。
+        roi_v = v_ret / v_stake if v_stake else None
+        roi_t = t_ret_w / t_stake_w if t_stake_w else None
         pooled[ck] = {
             "name": name,
             "n": n,
@@ -388,24 +395,31 @@ def run_part2(picks: dict, payoffs: dict, wakuban: dict, min_n: int) -> dict:
             "valid_n": int(v_n),
             "valid_roi": roi_v,
             "train_roi": roi_t,
-            "gap": (roi_t - roi_v) if not math.isnan(roi_v) else float("nan"),
+            "gap": (roi_t - roi_v)
+            if (roi_t is not None and roi_v is not None)
+            else None,
         }
     # セル別 検証ROI（過学習補正後の素直な実力）を降順表示。
     logger.info("  ◆ セル別 検証ROI（事前登録ゆえ選択バイアス無し）")
     logger.info(
         f"  {'セル':<14}{'fold':>5}{'検証N':>8}{'学習ROI':>9}{'検証ROI':>9}{'gap':>8}"
     )
+
+    def _pct(v: float | None) -> str:
+        return f"{v * 100:.1f}%" if v is not None else "—"
+
     for ck, p in sorted(
         pooled.items(),
-        key=lambda kv: kv[1]["valid_roi"] if not math.isnan(kv[1]["valid_roi"]) else -1,
+        key=lambda kv: kv[1]["valid_roi"] if kv[1]["valid_roi"] is not None else -1.0,
         reverse=True,
     ):
         if p["used_folds"] == 0:
-            logger.info(f"  {ck:<14}{'—':>5}{'(学習不足で全fold除外)':>0}")
+            logger.info(f"  {ck:<14}{'—':>5}  (学習不足で全fold除外)")
             continue
+        gap_s = f"{p['gap'] * 100:+.1f}" if p["gap"] is not None else "—"
         logger.info(
             f"  {ck:<14}{p['used_folds']:>5}{p['valid_n']:>8,}"
-            f"{p['train_roi'] * 100:>8.1f}%{p['valid_roi'] * 100:>8.1f}%{p['gap'] * 100:>+7.1f}"
+            f"{_pct(p['train_roi']):>9}{_pct(p['valid_roi']):>9}{gap_s:>8}"
         )
     # 選択回帰: foldごとに学習ROI最良セルを選び検証で採点 → プール。
     sel = _selection_regression(picks, payoffs, wakuban, cell_list, min_n)
@@ -418,7 +432,7 @@ def _selection_regression(picks, payoffs, wakuban, cell_list, min_n) -> dict:
     v_stake = v_ret = 0.0
     for tr_s, tr_e, va_s, va_e in CV_FOLDS:
         best = None
-        for key, name, kind, n in cell_list:
+        for key, _name, kind, n in cell_list:
             tr = agg_cell(picks, payoffs, wakuban, key, kind, n, tr_s, tr_e)
             if tr["n"] < min_n:
                 continue
@@ -444,10 +458,9 @@ def _selection_regression(picks, payoffs, wakuban, cell_list, min_n) -> dict:
             f"  選択回帰 検証{va_s}-{va_e}: 学習最良={best[0]}(学習ROI {best[1] * 100:.1f}%)"
             f" → 検証ROI {_roi(va) * 100:.1f}% (N={va['n']})"
         )
-    overall = v_ret / v_stake if v_stake else float("nan")
-    logger.info(
-        f"  → 選択回帰 検証ROIプール（最良券種の実力見積もり）: {overall * 100:.1f}%"
-    )
+    overall = v_ret / v_stake if v_stake else None
+    overall_s = f"{overall * 100:.1f}%" if overall is not None else "—"
+    logger.info(f"  → 選択回帰 検証ROIプール（最良券種の実力見積もり）: {overall_s}")
     return {"folds": folds, "valid_roi_pooled": overall}
 
 
@@ -543,7 +556,10 @@ def main() -> None:
         "note": "計測装置。CodeRabbitレビュー通過まで数値は暫定。OOS封印。",
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
-    OUT_PATH.write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
+    OUT_PATH.write_text(
+        json.dumps(out, ensure_ascii=False, indent=2, allow_nan=False),
+        encoding="utf-8",
+    )
     logger.info(f"レポート保存: {OUT_PATH}")
 
 
