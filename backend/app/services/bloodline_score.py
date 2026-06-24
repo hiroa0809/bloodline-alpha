@@ -16,19 +16,34 @@ from sqlalchemy.ext.asyncio import AsyncSession
 logger = logging.getLogger(__name__)
 
 # 配点デフォルト値（将来的にAPIパラメータで可変化）
+# A4(インブリード)/A5(アウトブリード) は #B5 Phase1 信号診断で予測力なし（レース内AUC≈0.50・
+# 市場超え増分も無し）と判明したため 2026-06-24 にライブスコアから除外した。
+# ※ _calc_inbreed_score は backtest（precompute_subscores）が coi 算出に使うため関数自体は残す。
 DEFAULT_WEIGHTS = {
-    "A1": 28,   # 父成績
-    "A2": 16,   # BMS成績
-    "A3": 8,    # ニックス
-    "A4": 7,    # インブリード
-    "A5": 6,    # アウトブリード
+    "A1": 28,  # 父成績
+    "A2": 16,  # BMS成績
+    "A3": 8,  # ニックス
 }
 
 # --- sandai_ketto インデックス定義 ---
 # 世代マッピング: インデックス → 世代数（馬自身から数えて）
 # Gen1(親): 0=父, 1=母  Gen2(祖父母): 2-5  Gen3(曾祖父母): 6-13
-_IDX_TO_GEN = {0: 1, 1: 1, 2: 2, 3: 2, 4: 2, 5: 2,
-               6: 3, 7: 3, 8: 3, 9: 3, 10: 3, 11: 3, 12: 3, 13: 3}
+_IDX_TO_GEN = {
+    0: 1,
+    1: 1,
+    2: 2,
+    3: 2,
+    4: 2,
+    5: 2,
+    6: 3,
+    7: 3,
+    8: 3,
+    9: 3,
+    10: 3,
+    11: 3,
+    12: 3,
+    13: 3,
+}
 # 父方の祖先インデックス（Gen2以降。父自身はGen1なので比較対象外）
 _SIRE_ANCESTOR_INDICES = (2, 3, 6, 7, 8, 9)
 # 母方の祖先インデックス（Gen2以降）
@@ -56,6 +71,7 @@ def _percentile_rank(sorted_values: list[float], value: float) -> float:
 # ============================================================
 # A1/A2: 父・BMS成績キャッシュ
 # ============================================================
+
 
 async def _build_percentile_cache(db: AsyncSession) -> dict:
     """sire_stats から role 別にソート済みリストを構築して新しいキャッシュを返す"""
@@ -113,6 +129,7 @@ async def refresh_percentile_cache(db: AsyncSession) -> None:
 # A3: ニックスキャッシュ
 # ============================================================
 
+
 async def _build_nicks_cache(db: AsyncSession) -> dict:
     """nicks_stats からパーセンタイル用キャッシュを構築"""
     result = await db.execute(
@@ -165,7 +182,10 @@ async def refresh_nicks_cache(db: AsyncSession) -> None:
 # サブスコア計算関数
 # ============================================================
 
-def _calc_sub_score(role: str, hanshoku_bango: str, weight: float) -> tuple[float, dict | None]:
+
+def _calc_sub_score(
+    role: str, hanshoku_bango: str, weight: float
+) -> tuple[float, dict | None]:
     """
     A1/A2: 1種牡馬/BMSのサブスコアを計算。
     返却: (スコア, info_dict or None)
@@ -285,12 +305,14 @@ def _calc_inbreed_score(
         d_gens = sorted(set(g for _, g in dam_side[bango]))
         cross = "×".join(str(g) for g in sorted(s_gens + d_gens))
 
-        inbreed_info.append({
-            "bamei": bamei,
-            "hanshoku_bango": bango,
-            "cross": cross,
-            "coi_contribution": round(ancestor_contribution, 6),
-        })
+        inbreed_info.append(
+            {
+                "bamei": bamei,
+                "hanshoku_bango": bango,
+                "cross": cross,
+                "coi_contribution": round(ancestor_contribution, 6),
+            }
+        )
 
     # COI → スコア変換（線形クリップ: 0〜_COI_NORMALIZE_MAX → 0〜1）
     normalized = min(1.0, coi / _COI_NORMALIZE_MAX)
@@ -302,6 +324,7 @@ def _calc_inbreed_score(
 # ============================================================
 # パース関数
 # ============================================================
+
 
 def parse_sandai_ketto(sandai_ketto_str: str | None) -> tuple[str | None, str | None]:
     """
@@ -320,10 +343,22 @@ def parse_sandai_ketto(sandai_ketto_str: str | None) -> tuple[str | None, str | 
             if not isinstance(ketto_list, list):
                 return None, None
             if len(ketto_list) > 0 and isinstance(ketto_list[0], dict):
-                sire_bango = ketto_list[0].get("hanshoku_toroku_bango", "").strip() or None
+                sire_bango = (
+                    ketto_list[0].get("hanshoku_toroku_bango", "").strip() or None
+                )
             if len(ketto_list) > 4 and isinstance(ketto_list[4], dict):
-                bms_bango = ketto_list[4].get("hanshoku_toroku_bango", "").strip() or None
-        except (ValueError, SyntaxError, RecursionError, MemoryError, TypeError, AttributeError, KeyError):
+                bms_bango = (
+                    ketto_list[4].get("hanshoku_toroku_bango", "").strip() or None
+                )
+        except (
+            ValueError,
+            SyntaxError,
+            RecursionError,
+            MemoryError,
+            TypeError,
+            AttributeError,
+            KeyError,
+        ):
             pass
 
     return sire_bango, bms_bango
@@ -344,7 +379,15 @@ def parse_sandai_ketto_full(sandai_ketto_str: str | None) -> list[dict] | None:
             ketto_list = ast.literal_eval(sandai_ketto_str)
         if isinstance(ketto_list, list) and len(ketto_list) >= 14:
             return ketto_list
-    except (ValueError, SyntaxError, RecursionError, MemoryError, TypeError, AttributeError, KeyError):
+    except (
+        ValueError,
+        SyntaxError,
+        RecursionError,
+        MemoryError,
+        TypeError,
+        AttributeError,
+        KeyError,
+    ):
         pass
 
     return None
@@ -354,59 +397,52 @@ def parse_sandai_ketto_full(sandai_ketto_str: str | None) -> list[dict] | None:
 # メインスコア計算
 # ============================================================
 
+
 def calc_bloodline_score(
     sire_bango: str | None,
     bms_bango: str | None,
-    sandai_ketto_list: list[dict] | None = None,
 ) -> dict:
     """
-    1頭分のカテゴリAスコアを計算して返す。
+    1頭分のカテゴリAスコア（A1父 / A2母父 / A3ニックス）を計算して返す。
     DBアクセスなし — 事前にパース済みの繁殖番号を受け取る。
     事前に ensure_percentile_cache() / ensure_nicks_cache() を呼んでおくこと。
 
+    ※ A4(インブリード)/A5(アウトブリード) は #B5 Phase1 信号診断で予測力なしと判明し
+      2026-06-24 に除外したため返さない。
+
     返却例:
     {
-        "A1": 25.2, "A2": 14.5, "A3": 5.6, "A4": 4.2, "A5": 0.0,
-        "total": 49.5,
-        "sire_info": {...}, "bms_info": {...},
-        "nicks_info": {...}, "inbreed_info": [...]
+        "A1": 25.2, "A2": 14.5, "A3": 5.6,
+        "total": 45.3,
+        "sire_info": {...}, "bms_info": {...}, "nicks_info": {...}
     }
     """
     if not _percentile_cache:
-        logger.warning("パーセンタイルキャッシュが未初期化です。ensure_percentile_cache()を呼んでください。")
+        logger.warning(
+            "パーセンタイルキャッシュが未初期化です。ensure_percentile_cache()を呼んでください。"
+        )
     if not _nicks_cache:
-        logger.warning("ニックスキャッシュが未初期化です。ensure_nicks_cache()を呼んでください。")
+        logger.warning(
+            "ニックスキャッシュが未初期化です。ensure_nicks_cache()を呼んでください。"
+        )
 
     # A1: 父成績
     a1_score, sire_info = _calc_sub_score("sire", sire_bango, DEFAULT_WEIGHTS["A1"])
     # A2: BMS成績
     a2_score, bms_info = _calc_sub_score("bms", bms_bango, DEFAULT_WEIGHTS["A2"])
     # A3: ニックス
-    a3_score, nicks_info = _calc_nicks_score(sire_bango, bms_bango, DEFAULT_WEIGHTS["A3"])
-    # A4: インブリード / A5: アウトブリード（排他）
-    # 14頭分のdict揃いを検証し、不完全データはA4/A5ともに0点
-    valid_sandai = None
-    if sandai_ketto_list and len(sandai_ketto_list) >= 14:
-        first_14 = sandai_ketto_list[:14]
-        if all(
-            isinstance(e, dict) and (e.get("hanshoku_toroku_bango") or "").strip()
-            for e in first_14
-        ):
-            valid_sandai = first_14
-    a4_score, coi, inbreed_info = _calc_inbreed_score(valid_sandai, DEFAULT_WEIGHTS["A4"])
-    a5_score = DEFAULT_WEIGHTS["A5"] if (valid_sandai and coi == 0.0) else 0.0
+    a3_score, nicks_info = _calc_nicks_score(
+        sire_bango, bms_bango, DEFAULT_WEIGHTS["A3"]
+    )
 
-    total = round(a1_score + a2_score + a3_score + a4_score + a5_score, 1)
+    total = round(a1_score + a2_score + a3_score, 1)
 
     return {
         "A1": a1_score,
         "A2": a2_score,
         "A3": a3_score,
-        "A4": a4_score,
-        "A5": a5_score,
         "total": total,
         "sire_info": sire_info,
         "bms_info": bms_info,
         "nicks_info": nicks_info,
-        "inbreed_info": inbreed_info,
     }

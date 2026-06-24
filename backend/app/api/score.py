@@ -284,7 +284,7 @@ async def get_mock_score(race_id: str):
 async def get_score(race_id: str, db: AsyncSession = Depends(get_db)):
     """
     指定レースの全出走馬に対して新馬戦スコアを計算して返す。
-    内訳: A=血統 / B=レース条件 / C=人的要素 / E=コンディション（E1-枠順, E2-斤量）。
+    内訳: A=血統 / B=レース条件 / C=人的要素 / E=コンディション（E2-斤量）。
     D=スピード指標は Phase 1（新馬戦専用）では対象外のため常に 0。
     race_id: 16桁（年4+月日4+競馬場2+回2+日目2+レース番号2）
     """
@@ -387,7 +387,7 @@ async def get_score(race_id: str, db: AsyncSession = Depends(get_db)):
                 bms_bango = None
         else:
             sire_bango, bms_bango = None, None
-        bloodline = calc_bloodline_score(sire_bango, bms_bango, ketto_list)
+        bloodline = calc_bloodline_score(sire_bango, bms_bango)
 
         # カテゴリB: レース条件スコア
         condition = calc_race_condition_score(
@@ -408,12 +408,8 @@ async def get_score(race_id: str, db: AsyncSession = Depends(get_db)):
             seisansha_code=(seisansha_code or "").strip() or None,
         )
 
-        # カテゴリE: コンディションスコア（新馬戦版: E1-枠順, E2-斤量）
+        # カテゴリE: コンディションスコア（新馬戦版: E2-斤量のみ）
         e_cond = calc_condition_score(
-            keibajo_code=pk["keibajo_code"],
-            track_code=race_track_code,
-            kyori=race_kyori,
-            wakuban=(wakuban or "").strip() or None,
             futan_juryo=(futan_juryo or "").strip() or None,
         )
 
@@ -445,8 +441,6 @@ async def get_score(race_id: str, db: AsyncSession = Depends(get_db)):
                             "A1": bloodline["A1"],
                             "A2": bloodline["A2"],
                             "A3": bloodline["A3"],
-                            "A4": bloodline["A4"],
-                            "A5": bloodline["A5"],
                         },
                     ),
                     "B": CategoryDetail(
@@ -469,7 +463,7 @@ async def get_score(race_id: str, db: AsyncSession = Depends(get_db)):
                     "D": CategoryDetail(total=0, details={}),
                     "E": CategoryDetail(
                         total=e_cond["total"],
-                        details={"E1": e_cond["E1"], "E2": e_cond["E2"]},
+                        details={"E2": e_cond["E2"]},
                     ),
                 },
                 sire_info=SireInfo(**bloodline["sire_info"])
