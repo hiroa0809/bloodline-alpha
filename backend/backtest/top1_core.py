@@ -86,6 +86,21 @@ def load_arrays(conn: sqlite3.Connection) -> dict:
     )
     out = farr("a5_outbreed")
     a["a5_col"] = np.where(out == 1.0, 1.0, 0.0)
+    # 信号診断（analyze_subscore_signal）用に raw（nan=データ無し）も公開する。
+    # a4_col/a5_col は「データ無し」と「coi=0/非アウト」を共に 0 に潰すため、
+    # 「データのある馬だけでAUCを測る」マスク作りには raw が要る。
+    a["a4_coi"] = coi
+    a["a5_outbreed"] = out
+
+    # 着順（chakujun は TEXT "01".."NN"。"00"/空/異常は 0=無効着）。TOP-N 入賞ラベル用。
+    def chk(v) -> int:
+        try:
+            iv = int(v)
+        except (TypeError, ValueError):
+            return 0
+        return iv if iv >= 1 else 0
+
+    a["chaku"] = np.array([chk(v) for v in cols["chakujun"]], dtype=np.int64)
 
     a["won"] = iarr("won")
     a["ninki"] = iarr("ninki")
