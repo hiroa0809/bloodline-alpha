@@ -101,6 +101,8 @@ _NAMES = {
 
 
 def _single_builders(k: str) -> dict:
+    """単一 wr/roi ペアのサブ項目（A1/A2/A3/C1/C2/E1/E2）の変種ビルダー群を返す。"""
+
     def wr(a, wb):
         return a[f"{k}_wr"], a[f"{k}_m"]
 
@@ -115,6 +117,8 @@ def _single_builders(k: str) -> dict:
 
 
 def _b_builders(k: str) -> dict:
+    """B系（B1-B4）の変種ビルダー群を返す（父のみ / 母父のみ / 父母父ブレンド）。"""
+
     def sire(a, wb):
         return core._pair(
             a[f"{k}_sire_wr"], a[f"{k}_sire_roi"], a[f"{k}_sire_m"], wb
@@ -137,6 +141,8 @@ def _b_builders(k: str) -> dict:
 
 
 def _c3_builders() -> dict:
+    """C3（馬主/生産者）の変種ビルダー群を返す（馬主のみ / 生産者のみ / 平均）。"""
+
     def owner(a, wb):
         return core._pair(a["c3_owner_wr"], a["c3_owner_roi"], a["c3_owner_m"], wb), a[
             "c3_owner_m"
@@ -156,10 +162,12 @@ def _c3_builders() -> dict:
 
 
 def _a4_builder(a, wb):
+    """A4（近交係数）の vals/mask。mask は coi が存在する馬（nan=データ無しを除外）。"""
     return a["a4_col"], ~np.isnan(a["a4_coi"])
 
 
 def _a5_builder(a, wb):
+    """A5（アウトブリード・二値）の vals/mask。mask は血統が判明している馬。"""
     return a["a5_col"], ~np.isnan(a["a5_outbreed"])
 
 
@@ -319,15 +327,30 @@ def market_builder(a):
 # ============================================================
 
 
+def _consistency_blocks(y0: int, y1: int) -> list[tuple[int, int]]:
+    """3ブロック一貫ゲート用のブロック範囲を返す。
+
+    既定（full-IS）では事前登録の IS_BLOCKS をそのまま使う（金庫ルール）。部分期間
+    （スモーク等で IS_BLOCKS がどれも収まらない範囲）では、選択範囲を3等分してブロックを
+    再構成する。こうしないと block 集合が空になり、全項目が一貫性ゲートで不当に削除候補に
+    潰れる（CodeRabbit PR#13 指摘反映）。
+    """
+    fit = [b for b in IS_BLOCKS if y0 <= b[0] and b[1] <= y1]
+    if fit:
+        return fit
+    if y1 <= y0 or (y1 - y0 + 1) < 3:
+        return [(y0, y1)]
+    step = (y1 - y0 + 1) // 3
+    return [(y0, y0 + step - 1), (y0 + step, y0 + 2 * step - 1), (y0 + 2 * step, y1)]
+
+
 def analyze(
     a: dict, top_n: int, odds_ratio: float, auc_min: float, wr_blend: float
 ) -> dict:
     """全14次元×変種を評価し、判定ラベル付きのレポート dict を返す。"""
     y0, y1 = a["_range"]
     pooled_idx = race_indices(a, y0, y1)
-    block_idx = [
-        (b, race_indices(a, b[0], b[1])) for b in IS_BLOCKS if y0 <= b[0] and b[1] <= y1
-    ]
+    block_idx = [(b, race_indices(a, b[0], b[1])) for b in _consistency_blocks(y0, y1)]
 
     # ② 市場参照（dim 非依存）
     mvals, mmask = market_builder(a)
@@ -360,11 +383,22 @@ def analyze(
                 for b, idx in block_idx
             ]
             vres[vname] = {**pooled, "block_aucs": blocks}
-        # 最良変種＝プール①AUC 最大（nan は除外）
-        best_v = max(
-            vres,
-            key=lambda v: vres[v]["auc"] if not np.isnan(vres[v]["auc"]) else -1.0,
-        )
+
+        # 最良変種＝「3ブロック一貫で信号あり」を第一に優先し、その中（無ければ全体）で
+        # プール①AUC 最大。単純な pooled AUC 最大だと、最大変種だけ不一致のとき一貫した
+        # 別変種が削除候補に潰れる（CodeRabbit PR#13 指摘反映）。
+        def variant_key(v: str) -> tuple[bool, float]:
+            auc = vres[v]["auc"]
+            baucs = [b["auc"] for b in vres[v]["block_aucs"]]
+            signal_ok = (
+                (not np.isnan(auc))
+                and auc >= auc_min
+                and bool(baucs)
+                and all((not np.isnan(x)) and x > 0.5 for x in baucs)
+            )
+            return signal_ok, (auc if not np.isnan(auc) else -1.0)
+
+        best_v = max(vres, key=variant_key)
         best = vres[best_v]
         block_aucs = [b["auc"] for b in best["block_aucs"]]
         block_maucs = [b["matched_auc"] for b in best["block_aucs"]]
@@ -441,6 +475,7 @@ def _log_table(results: list[dict], top_n: int) -> None:
 
 
 def main() -> None:
+    """CLI 引数を解析し、IS 限定で全14次元の信号診断を実行してレポートを保存する。"""
     ap = argparse.ArgumentParser(
         description="#B5 Phase1 サブ項目 信号診断（IS限定・OOS封印）"
     )
@@ -473,9 +508,15 @@ def main() -> None:
     )
     args = ap.parse_args()
 
-    if args.end_year > IS_END:
+    if args.start_year < IS_START or args.end_year > IS_END:
         logger.error(
-            f"OOS封印違反: end-year={args.end_year} > IS_END={IS_END}。IS内に限定せよ。"
+            f"OOS封印違反: range={args.start_year}-{args.end_year} は "
+            f"IS={IS_START}-{IS_END} 外です。IS内に限定せよ。"
+        )
+        sys.exit(1)
+    if args.start_year > args.end_year:
+        logger.error(
+            f"期間指定が不正です: start-year={args.start_year} > end-year={args.end_year}"
         )
         sys.exit(1)
     if not DB_PATH.exists():
