@@ -118,13 +118,18 @@ def _safe_chaku(v) -> int:
 # ============================================================
 
 
-def load_race_info(conn: sqlite3.Connection) -> dict:
-    """jvd_race → レースPK → {date, year, keibajo, surface, kyori, is_maiden}。"""
+def load_race_info(conn: sqlite3.Connection, scan_start: int, ana_end: int) -> dict:
+    """jvd_race → レースPK → {date, year, keibajo, surface, kyori, is_maiden}。
+
+    年範囲は SQL 側で絞り、OOS（ana_end 超）行をアプリへ読み込まない（封印を境界で担保）。
+    """
     info: dict[tuple, dict] = {}
     cur = conn.execute(
         "SELECT kaisai_nen, kaisai_tsukihi, keibajo_code, kaisai_kai, kaisai_nichime, "
         "  race_bango, track_code, kyori, "
-        "  kyoso_joken_code_2sai, kyoso_joken_code_3sai FROM jvd_race"
+        "  kyoso_joken_code_2sai, kyoso_joken_code_3sai FROM jvd_race "
+        "WHERE CAST(kaisai_nen AS INTEGER) BETWEEN ? AND ?",
+        (scan_start, ana_end),
     )
     for nen, tsukihi, keibajo, kai, nichime, rbango, track, kyori, j2, j3 in cur:
         try:
@@ -152,7 +157,9 @@ def load_runs(conn: sqlite3.Connection, race_info: dict, scan_start: int, ana_en
     cur = conn.execute(
         "SELECT kaisai_nen, kaisai_tsukihi, keibajo_code, kaisai_kai, kaisai_nichime, "
         "  race_bango, umaban, ketto_toroku_bango, kakutei_chakujun, tansho_odds, "
-        "  ijo_kubun_code, soha_time, ato_3f_time FROM jvd_race_uma"
+        "  ijo_kubun_code, soha_time, ato_3f_time FROM jvd_race_uma "
+        "WHERE CAST(kaisai_nen AS INTEGER) BETWEEN ? AND ?",
+        (scan_start, ana_end),
     )
     for row in cur:
         (
@@ -388,11 +395,13 @@ def analyze(
         )
 
     _log_table(results, top_n)
-    # go/no-go: スピード(soha)変種のいずれかが「エッジ候補」なら通過。
+    # go/no-go: スピード(soha)変種のいずれかが「エッジ候補」判定なら通過。
+    # verdict は①生AUC>0.5＆ブロック一貫＆③matched_consistent を全て満たす時のみ「エッジ候補」。
+    # matched_consistent 単独だと生AUC不足の特徴でも通過し得るため verdict で判定する。
     soha_edge = [
         r
         for r in results
-        if r["feature"].startswith("soha") and r["matched_consistent"]
+        if r["feature"].startswith("soha") and r["verdict"] == "エッジ候補"
     ]
     gate_pass = len(soha_edge) > 0
     logger.info(
@@ -469,7 +478,7 @@ def main() -> None:
     conn = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
     try:
         logger.info("レース条件をロード中...")
-        race_info = load_race_info(conn)
+        race_info = load_race_info(conn, scan_start, ana_end)
         logger.info(f"jvd_race_uma を走査中（{scan_start}-{ana_end}・平地戦）...")
         runs = load_runs(conn, race_info, scan_start, ana_end)
     finally:
