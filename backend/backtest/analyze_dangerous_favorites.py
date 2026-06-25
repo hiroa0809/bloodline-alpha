@@ -192,23 +192,53 @@ def by_band_and_flag(records: list[dict]) -> dict[str, dict]:
     return out
 
 
+def band_weighted_win_gap(records: list[dict]) -> float | None:
+    """オッズ帯ごとに agree(rank1) vs dangerous(rank>=DANGER_RANK) の勝率差を取り、
+    各帯の比較対象頭数(agree_n+danger_n)で加重平均した「市場制御後の勝率差」を返す。
+
+    全帯混在の単純な勝率差は、dangerous 側に高オッズ帯が偏るだけで正に出る交絡を持つ
+    （CodeRabbit PR#16 指摘）。オッズ帯を揃えた上で帯内比較し層化加重することで、
+    Part1 #3（by_band_and_flag）と同じ「市場評価を揃えた増分」を3ブロックゲートでも測る。
+    比較可能な帯（両群とも n>0）が1つも無ければ None。
+    """
+    num = den = 0.0
+    for _, _, band in ODDS_BANDS:
+        in_band = [r for r in records if band_of(r["fav_odds"]) == band]
+        a = [r for r in in_band if r["fav_rank"] == 1]
+        d = [r for r in in_band if r["fav_rank"] >= DANGER_RANK]
+        if not a or not d:
+            continue
+        a_hit = sum(r["fav_won"] for r in a) / len(a)
+        d_hit = sum(r["fav_won"] for r in d) / len(d)
+        w = len(a) + len(d)
+        num += (a_hit - d_hit) * w
+        den += w
+    return num / den if den else None
+
+
 def block_consistency(races: dict, weights: dict, wr_blend: float) -> dict:
-    """Part1 #4: 「dangerous の勝率 < agree の勝率」が3ブロック全部で成立するか。"""
+    """Part1 #4: 「オッズ帯制御後も dangerous の勝率 < agree」が3ブロック全部で成立するか。
+
+    ゲート判定は band_weighted_win_gap（市場制御後）で行う。全帯混在の pooled_win_gap は
+    交絡（オッズmix）を含むため参考値として併記のみ（CodeRabbit PR#16 指摘反映）。
+    """
     blocks = []
     all_ok = True
     for b0, b1 in IS_BLOCKS:
         recs = collect_race_records(races, b0, b1, weights, wr_blend)
         agree = fav_summary([r for r in recs if r["fav_rank"] == 1])
         danger = fav_summary([r for r in recs if r["fav_rank"] >= DANGER_RANK])
-        win_gap = agree["hit"] - danger["hit"]  # >0 なら dangerous の方が負ける
-        ok = agree["n"] > 0 and danger["n"] > 0 and win_gap > 0
+        pooled_gap = agree["hit"] - danger["hit"]  # 参考: 全帯混在（交絡あり）
+        band_gap = band_weighted_win_gap(recs)  # ゲート基準: 市場制御後
+        ok = band_gap is not None and band_gap > 0
         all_ok = all_ok and ok
         blocks.append(
             {
                 "block": [b0, b1],
                 "agree": agree,
                 "dangerous": danger,
-                "win_gap": win_gap,
+                "pooled_win_gap": pooled_gap,
+                "band_weighted_win_gap": band_gap,
                 "ok": ok,
             }
         )
@@ -384,15 +414,16 @@ def run_diagnostic(races: dict, weights: dict, wr_blend: float) -> dict:
 
     consistency = block_consistency(races, weights, wr_blend)
     logger.info(
-        f"3ブロック一貫ゲート（全ブロックで dangerous の勝率 < agree か）: "
+        f"3ブロック一貫ゲート（全ブロックでオッズ帯制御後の勝率差 dangerous<agree か）: "
         f"{'○ 一貫' if consistency['consistent'] else '× 不一致'}"
     )
     for b in consistency["blocks"]:
+        bg = b["band_weighted_win_gap"]
+        bg_s = "—" if bg is None else f"{bg * 100:+.1f}pt"
         logger.info(
-            f"  {b['block'][0]}-{b['block'][1]}: agree勝率 "
-            f"{b['agree']['hit'] * 100:.1f}% vs dangerous勝率 "
-            f"{b['dangerous']['hit'] * 100:.1f}% "
-            f"(差{b['win_gap'] * 100:+.1f}pt) {'○' if b['ok'] else '×'}"
+            f"  {b['block'][0]}-{b['block'][1]}: 帯制御後 勝率差(agree−dangerous) {bg_s} "
+            f"(参考・全帯混在 {b['pooled_win_gap'] * 100:+.1f}pt) "
+            f"{'○' if b['ok'] else '×'}"
         )
 
     return {
