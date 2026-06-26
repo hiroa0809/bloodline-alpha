@@ -28,6 +28,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import sqlite3
 import sys
@@ -36,6 +37,9 @@ from pathlib import Path
 _BACKEND_DIR = Path(__file__).resolve().parent.parent
 DB_PATH = _BACKEND_DIR / "bloodline.db"
 CACHE_TABLE = "backtest_subscore_cache"
+# Direction A（一般戦）キャッシュ。--target general で切替。
+CACHE_GENERAL = "backtest_subscore_cache_general"
+IS_END_YEAR = 2013  # 一般戦は OOS 封印のため IS 終端までを評価
 
 logging.basicConfig(
     level=logging.INFO,
@@ -136,13 +140,30 @@ def compute_score(row: sqlite3.Row, weights: dict, wr_blend: float) -> float:
         if p is not None:
             s += p * half
 
+    # スピード（一般戦キャッシュのみ。weights["SP"] があれば走破直近 as-of pctl を加算）。
+    # top1_core.score_all と同一の代表1次元（M1で走破直近が最強）。データ無しは加算しない。
+    if "SP" in weights:
+        try:
+            sp = row["sp_soha_recent_pctl"]
+        except (IndexError, KeyError):
+            sp = None
+        if sp is not None:
+            s += sp * weights["SP"]
+
     return s
 
 
-def load_races(conn: sqlite3.Connection) -> dict[str, list[sqlite3.Row]]:
-    """クリーン期間の全キャッシュ行を race_id 単位でグループ化して返す。"""
+def load_races(
+    conn: sqlite3.Connection, table: str = CACHE_TABLE, year_max: int | None = None
+) -> dict[str, list[sqlite3.Row]]:
+    """キャッシュ行を race_id 単位でグループ化して返す。
+
+    table: 読み込むキャッシュ表（既定=新馬戦）。year_max 指定時は as_of_year<=year_max
+    の行のみ（一般戦の OOS を SQL で封印＝金庫ルール）。
+    """
     conn.row_factory = sqlite3.Row
-    rows = conn.execute(f"SELECT * FROM {CACHE_TABLE}").fetchall()
+    where = "" if year_max is None else f" WHERE as_of_year <= {int(year_max)}"
+    rows = conn.execute(f"SELECT * FROM {table}{where}").fetchall()
     races: dict[str, list[sqlite3.Row]] = {}
     for r in rows:
         races.setdefault(r["race_id"], []).append(r)
@@ -233,21 +254,45 @@ def main() -> None:
         default=DEFAULT_WR_BLEND,
         help="勝率/ROI ブレンド比の勝率側（既定 0.6）",
     )
+    ap.add_argument(
+        "--target",
+        choices=["maiden", "general"],
+        default="maiden",
+        help="maiden=新馬戦キャッシュ / general=一般戦キャッシュ（Direction A・OOS封印）",
+    )
+    ap.add_argument(
+        "--weights",
+        type=str,
+        default=None,
+        help="配点JSONパス（optimize_top1 等の出力。省略時 DEFAULT_WEIGHTS）",
+    )
     args = ap.parse_args()
 
     if not DB_PATH.exists():
         logger.error(f"DBファイルが見つかりません: {DB_PATH}")
         sys.exit(1)
 
+    # 対象キャッシュ・評価フォールド・配点を target/weights で決める。
+    table, year_max, folds = CACHE_TABLE, None, FOLDS
+    if args.target == "general":
+        table, year_max = CACHE_GENERAL, IS_END_YEAR
+        folds = [f for f in FOLDS if f[2] <= IS_END_YEAR]  # IS まで（OOS封印）
+    weights, wr_blend = DEFAULT_WEIGHTS, args.wr_blend
+    if args.weights:
+        data = json.loads(Path(args.weights).read_text(encoding="utf-8"))
+        weights = {**DEFAULT_WEIGHTS, **data.get("weights", {})}  # SP 等を上書き反映
+        wr_blend = data.get("wr_blend", wr_blend)
+
     conn = sqlite3.connect(str(DB_PATH), timeout=120)
     try:
-        races = load_races(conn)
+        races = load_races(conn, table, year_max)
     finally:
         conn.close()
 
     logger.info(
         f"=== ウォークフォワード・バックテスト（スコア1位 単勝） / "
-        f"勝率ブレンド {args.wr_blend} ==="
+        f"target={args.target} / 勝率ブレンド {wr_blend} / "
+        f"配点={'JSON' if args.weights else 'DEFAULT'} ==="
     )
     header = (
         f"{'fold':<14}{'期間':<12}{'N(レース)':>10}"
@@ -255,8 +300,8 @@ def main() -> None:
         f"{'1番人気ROI':>12}{'的中率':>9}"
     )
     logger.info(header)
-    for label, ys, ye, evaluated in FOLDS:
-        m = evaluate(races, ys, ye, DEFAULT_WEIGHTS, args.wr_blend)
+    for label, ys, ye, evaluated in folds:
+        m = evaluate(races, ys, ye, weights, wr_blend)
         tag = label if evaluated else f"{label}(参考)"
         logger.info(
             f"{tag:<14}{f'{ys}-{ye}':<12}{m['n']:>10,}"
