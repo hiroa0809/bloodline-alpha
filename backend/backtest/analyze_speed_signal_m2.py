@@ -150,13 +150,15 @@ def load_race_info(conn: sqlite3.Connection, scan_start: int, ana_end: int) -> d
         except (ValueError, TypeError):
             continue
         surface = track_to_surface(track)  # 障害は None
+        # 条件コードは固定長/空白付きで返り得るため strip 済み値を is_maiden/class_tier で共有。
+        codes = tuple((c or "").strip() for c in (j2, j3, j4, j5))
         info[(nen, tsukihi, keibajo, kai, nichime, rbango)] = {
             "date": f"{nen}{tsukihi}",
             "year": year,
             "surface": surface,
             "kyori": (kyori or "").strip() or None,
-            "is_maiden": "701" in (j2, j3),
-            "class_tier": race_class_tier((j2, j3, j4, j5), grade),
+            "is_maiden": "701" in codes[:2],
+            "class_tier": race_class_tier(codes, grade),
             "going_bucket": going_bucket(surface, shiba, dirt),
         }
     return info
@@ -195,19 +197,23 @@ def load_runs(conn: sqlite3.Connection, race_info: dict, scan_start: int, ana_en
             continue
         if not (umaban and umaban.strip()):
             continue
+        ketto_id = (ketto or "").strip()
+        if not ketto_id:
+            continue  # 空 ketto は別馬同士が同一集約キーに混ざるため除外
+        ijo_code = (ijo or "").strip()
         try:
             odds_real = int(odds) / 10.0 if odds and odds.strip() else None
         except (ValueError, TypeError):
             odds_real = None
         chaku_i = _safe_chaku(chaku)
-        valid_finish = chaku_i >= 1 and (ijo is None or ijo == "0")
+        valid_finish = chaku_i >= 1 and ijo_code in ("", "0")
         runs.append(
             {
                 "date": info["date"],
                 "year": year,
                 "race_id": f"{nen}{tsukihi}{keibajo}{kai}{nichime}{rbango}",
                 "umaban": umaban.strip(),
-                "ketto": ketto,
+                "ketto": ketto_id,
                 "chaku": chaku_i,
                 "odds": odds_real,
                 "is_maiden": info["is_maiden"],
@@ -457,9 +463,16 @@ def analyze(a, ana_start, ana_end, top_n, odds_ratio, auc_min, min_day_runs) -> 
     }
 
     mvals, mmask = market_builder(a)
-    market_pooled = auc_over_races(
-        a, mvals, mmask, idx_all["pooled"], top_n, odds_ratio
-    )["auc"]
+    # 市場参照AUC は診断スコープ別に出す（OFF限定特徴は OFF馬場の市場と比較する）。
+    market_by_scope = {
+        "all": auc_over_races(a, mvals, mmask, idx_all["pooled"], top_n, odds_ratio)[
+            "auc"
+        ],
+        "off": auc_over_races(a, mvals, mmask, idx_off["pooled"], top_n, odds_ratio)[
+            "auc"
+        ],
+    }
+    market_pooled = market_by_scope["all"]
     logger.info(f"市場参照AUC（1/オッズ・TOP{top_n}・全馬場）: {market_pooled:.4f}")
 
     results = []
@@ -496,7 +509,7 @@ def analyze(a, ana_start, ana_end, top_n, odds_ratio, auc_min, min_day_runs) -> 
                 "scope": scope,
                 "verdict": verdict,
                 "pooled_auc": pooled["auc"],
-                "market_auc": market_pooled,
+                "market_auc": market_by_scope[scope],
                 "matched_auc": pooled["matched_auc"],
                 "matched_pairs": pooled["matched_pairs"],
                 "coverage": coverage,
