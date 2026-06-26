@@ -227,9 +227,11 @@ def scan_and_collect(conn, sire_map, a4a5_map, seisansha_map, race_info):
             seisansha = seisansha_map.get(ketto)
             if seisansha:
                 eng["human"].add(("breeder",), seisansha, year, won, roinum)
-            # E1/E2: 枠順・斤量（一般戦＝非新馬のみ。土俵移しに伴い母集団を非新馬に変更）
-            if not is_maiden:
-                if surface and waku and waku.strip():
+            # E1/E2: 枠順・斤量（一般戦＝非新馬・平地のみ。土俵移しに伴い母集団を非新馬に
+            # 変更。E2も surface ガード内に入れ、障害戦の斤量が weight 母集団へ混入するのを防ぐ
+            # （スコア対象は非新馬・平地なので prior も同じ母集団に揃える。CodeRabbit PR#18 指摘）。
+            if surface is not None and not is_maiden:
+                if waku and waku.strip():
                     eng["draw"].add(
                         (keibajo, surface, dband), waku.strip(), year, won, roinum
                     )
@@ -311,6 +313,16 @@ def score_all_years(eng: dict, runs: list[dict]) -> list[tuple]:
 
     rows: list[tuple] = []
     prior: dict[str, list[float]] = {c: [] for c in SPEED_RAW_COLS}  # year未満の累積
+    # CLEAN_START より前の非新馬・平地履歴で prior を seed する（CodeRabbit PR#18 指摘）。
+    # ファンダ側（eng.advance_to）は対象年より前の全履歴を母集団にするため、スピード pctl の
+    # 母集団も同じ as-of に揃える。揃えないと部分実行（--start-year 指定）の sp_pctl が
+    # full 実行（CLEAN_START=1986）の値と食い違う。runs は全期間を保持（scan は年で絞らない）。
+    for r in runs:
+        if not r["is_maiden"] and r["year"] < CLEAN_START:
+            for raw_col, fkey in zip(SPEED_RAW_COLS, SPEED_FKEYS):
+                v = _fval(r, fkey)
+                if v is not None:
+                    prior[raw_col].append(v)
     for year in range(CLEAN_START, CLEAN_END + 1):
         runners = targets_by_year.get(year)
         if not runners:
@@ -430,6 +442,12 @@ def main() -> None:
     ap.add_argument("--start-year", type=int, default=CLEAN_START)
     ap.add_argument("--end-year", type=int, default=CLEAN_END)
     args = ap.parse_args()
+    # 年範囲を検証してから走る（CodeRabbit PR#18 指摘）。不正範囲だと空行でテーブルを
+    # 作り直した後に SUM(won)=None フォーマットで落ち、既存キャッシュも失うため早期停止する。
+    if not (1986 <= args.start_year <= args.end_year <= 2025):
+        ap.error(
+            "--start-year/--end-year は 1986..2025 かつ start <= end にしてください"
+        )
     CLEAN_START, CLEAN_END = args.start_year, args.end_year
 
     logger.info(f"DB: {DB_PATH}")

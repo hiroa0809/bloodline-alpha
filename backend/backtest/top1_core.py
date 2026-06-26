@@ -25,6 +25,9 @@ COI_NORMALIZE_MAX = 0.15  # A4 近交係数の正規化上限
 BMS_BLEND_SIRE = 0.6  # B カテゴリの sire/bms ブレンド
 
 CACHE_TABLE = "backtest_subscore_cache"
+CACHE_GENERAL = "backtest_subscore_cache_general"  # Direction A（一般戦）キャッシュ
+# SQL に埋め込む table 名は固定候補のみ許可（SAST 対策・CodeRabbit PR#18 指摘）。
+_ALLOWED_TABLES = {CACHE_TABLE, CACHE_GENERAL}
 
 # 単一 wr/roi ペアのサブ項目（重みキー, カラム接頭辞）。
 _SINGLE = [
@@ -55,10 +58,15 @@ def load_arrays(
     レース境界（race_start: R+1, race_year: R）、race_id/umaban（ゴールデン照合用）。
     一般戦キャッシュ時は sp_*（生値）/ sp_*_pctl（as-of 百分位）/ sp_*_m（マスク）も。
     """
-    where = "" if year_max is None else f" WHERE as_of_year <= {int(year_max)}"
-    cur = conn.execute(
-        f"SELECT * FROM {table}{where} ORDER BY as_of_year, race_id, umaban"
-    )
+    if table not in _ALLOWED_TABLES:
+        raise ValueError(f"未対応のキャッシュ表: {table}")
+    order = "ORDER BY as_of_year, race_id, umaban"
+    if year_max is None:
+        cur = conn.execute(f"SELECT * FROM {table} {order}")
+    else:
+        cur = conn.execute(
+            f"SELECT * FROM {table} WHERE as_of_year <= ? {order}", (int(year_max),)
+        )
     names = [d[0] for d in cur.description]
     rows = cur.fetchall()
     cols = {n: [row[i] for row in rows] for i, n in enumerate(names)}

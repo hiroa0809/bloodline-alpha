@@ -161,9 +161,15 @@ def load_races(
     table: 読み込むキャッシュ表（既定=新馬戦）。year_max 指定時は as_of_year<=year_max
     の行のみ（一般戦の OOS を SQL で封印＝金庫ルール）。
     """
+    if table not in {CACHE_TABLE, CACHE_GENERAL}:  # SAST 対策（CodeRabbit PR#18 指摘）
+        raise ValueError(f"未対応のキャッシュ表: {table}")
     conn.row_factory = sqlite3.Row
-    where = "" if year_max is None else f" WHERE as_of_year <= {int(year_max)}"
-    rows = conn.execute(f"SELECT * FROM {table}{where}").fetchall()
+    if year_max is None:
+        rows = conn.execute(f"SELECT * FROM {table}").fetchall()
+    else:
+        rows = conn.execute(
+            f"SELECT * FROM {table} WHERE as_of_year <= ?", (int(year_max),)
+        ).fetchall()
     races: dict[str, list[sqlite3.Row]] = {}
     for r in rows:
         races.setdefault(r["race_id"], []).append(r)
