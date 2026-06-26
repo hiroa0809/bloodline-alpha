@@ -348,9 +348,21 @@ def _consistency_blocks(y0: int, y1: int) -> list[tuple[int, int]]:
 
 
 def analyze(
-    a: dict, top_n: int, odds_ratio: float, auc_min: float, wr_blend: float
+    a: dict,
+    top_n: int,
+    odds_ratio: float,
+    auc_min: float,
+    wr_blend: float,
+    dims: list | None = None,
+    names: dict | None = None,
 ) -> dict:
-    """全14次元×変種を評価し、判定ラベル付きのレポート dict を返す。"""
+    """全次元×変種を評価し、判定ラベル付きのレポート dict を返す。
+
+    dims/names を渡すと診断対象の次元集合・表示名を差し替えられる（Direction A の
+    一般戦版がスピード・総合スコア次元を足して再利用する）。既定は新馬戦14次元。
+    """
+    dims = build_dimensions() if dims is None else dims
+    names = _NAMES if names is None else names
     y0, y1 = a["_range"]
     pooled_idx = race_indices(a, y0, y1)
     block_idx = [(b, race_indices(a, b[0], b[1])) for b in _consistency_blocks(y0, y1)]
@@ -373,7 +385,7 @@ def analyze(
     )
 
     results = []
-    for sub, variants in build_dimensions():
+    for sub, variants in dims:
         vres = {}
         for vname, builder in variants.items():
             vals, mask = builder(a, wr_blend)
@@ -427,7 +439,7 @@ def analyze(
         results.append(
             {
                 "sub": sub,
-                "name": _NAMES[sub],
+                "name": names[sub],
                 "best_variant": best_v,
                 "label": label,
                 "consistent": consistent,

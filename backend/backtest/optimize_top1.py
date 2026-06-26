@@ -325,6 +325,12 @@ def main() -> None:
     )
     ap.add_argument("--n-trials", type=int, default=1000, help="各手法の試行数")
     ap.add_argument("--seed", type=int, default=42, help="サンプラー乱数シード")
+    ap.add_argument(
+        "--target",
+        choices=["maiden", "general"],
+        default="maiden",
+        help="maiden=新馬戦14次元 / general=一般戦14次元+SP（Direction A・OOS封印）",
+    )
     args = ap.parse_args()
     if args.n_trials < 1:
         ap.error("--n-trials は 1 以上を指定してください")
@@ -332,12 +338,26 @@ def main() -> None:
         logger.error(f"DBファイルが見つかりません: {DB_PATH}")
         sys.exit(1)
 
+    # 一般戦は SP（走破直近）次元を加え、別キャッシュ・別出力・OOS封印（year_max）で回す。
+    global SUBS, REPORT_PATH, WEIGHTS_PATH, CHECKPOINT_PATH
+    table, year_max = core.CACHE_TABLE, None
+    if args.target == "general":
+        if "SP" not in SUBS:
+            SUBS = SUBS + ["SP"]
+        table, year_max = "backtest_subscore_cache_general", IS_END
+        REPORT_PATH = _BACKEND_DIR / "backtest" / "top1_general_report.json"
+        WEIGHTS_PATH = _BACKEND_DIR / "backtest" / "top1_weights_general.json"
+        CHECKPOINT_PATH = _BACKEND_DIR / "backtest" / "top1_general_checkpoint.json"
+
     conn = sqlite3.connect(str(DB_PATH), timeout=120)
     try:
-        arrays = core.load_arrays(conn)
+        arrays = core.load_arrays(conn, table=table, year_max=year_max)
     finally:
         conn.close()
-    logger.info(f"対象: {arrays['N']:,} 頭 / {arrays['R']:,} レース")
+    logger.info(
+        f"対象（target={args.target}・{len(SUBS)}次元）: "
+        f"{arrays['N']:,} 頭 / {arrays['R']:,} レース"
+    )
 
     ckpt = _load_checkpoint()
     if ckpt:

@@ -25,6 +25,9 @@ COI_NORMALIZE_MAX = 0.15  # A4 近交係数の正規化上限
 BMS_BLEND_SIRE = 0.6  # B カテゴリの sire/bms ブレンド
 
 CACHE_TABLE = "backtest_subscore_cache"
+CACHE_GENERAL = "backtest_subscore_cache_general"  # Direction A（一般戦）キャッシュ
+# SQL に埋め込む table 名は固定候補のみ許可（SAST 対策・CodeRabbit PR#18 指摘）。
+_ALLOWED_TABLES = {CACHE_TABLE, CACHE_GENERAL}
 
 # 単一 wr/roi ペアのサブ項目（重みキー, カラム接頭辞）。
 _SINGLE = [
@@ -42,15 +45,28 @@ _B = [("B1", "b1"), ("B2", "b2"), ("B3", "b3"), ("B4", "b4")]
 _EPS = 1e-12  # 同点判定の許容誤差
 
 
-def load_arrays(conn: sqlite3.Connection) -> dict:
+def load_arrays(
+    conn: sqlite3.Connection, table: str = CACHE_TABLE, year_max: int | None = None
+) -> dict:
     """キャッシュ全行を (as_of_year, race_id) 昇順で読み、numpy 配列群に変換する。
+
+    table: 読み込むキャッシュ表（既定=新馬戦の backtest_subscore_cache）。一般戦
+    （Direction A）の backtest_subscore_cache_general を指定するとスピード列も読む。
+    year_max: 指定時は as_of_year<=year_max の行のみ読む（OOSをSQLで封印＝金庫ルール）。
 
     返却 dict: 各特徴の wr/roi/mask、a4_col/a5_col（blend 非依存）、won/odds/ninki、
     レース境界（race_start: R+1, race_year: R）、race_id/umaban（ゴールデン照合用）。
+    一般戦キャッシュ時は sp_*（生値）/ sp_*_pctl（as-of 百分位）/ sp_*_m（マスク）も。
     """
-    cur = conn.execute(
-        f"SELECT * FROM {CACHE_TABLE} ORDER BY as_of_year, race_id, umaban"
-    )
+    if table not in _ALLOWED_TABLES:
+        raise ValueError(f"未対応のキャッシュ表: {table}")
+    order = "ORDER BY as_of_year, race_id, umaban"
+    if year_max is None:
+        cur = conn.execute(f"SELECT * FROM {table} {order}")
+    else:
+        cur = conn.execute(
+            f"SELECT * FROM {table} WHERE as_of_year <= ? {order}", (int(year_max),)
+        )
     names = [d[0] for d in cur.description]
     rows = cur.fetchall()
     cols = {n: [row[i] for row in rows] for i, n in enumerate(names)}
@@ -108,6 +124,13 @@ def load_arrays(conn: sqlite3.Connection) -> dict:
     a["race_id"] = np.array(cols["race_id"], dtype=object)
     a["umaban"] = np.array(cols["umaban"], dtype=object)
 
+    # スピード列（一般戦キャッシュのみ存在）。生値=AUC順序用、pctl=束ねスコア用。
+    for sp in ("sp_soha_best", "sp_soha_recent", "sp_soha_avg", "sp_ato3f_best"):
+        if sp in cols:
+            a[sp] = farr(sp)
+            a[f"{sp}_pctl"] = farr(f"{sp}_pctl")
+            a[f"{sp}_m"] = ~np.isnan(a[sp])
+
     year = iarr("as_of_year")
     rid = a["race_id"]
     n = len(rid)
@@ -150,6 +173,11 @@ def score_all(a: dict, weights: dict, blend: float) -> np.ndarray:
     op = _pair(a["c3_owner_wr"], a["c3_owner_roi"], a["c3_owner_m"], blend)
     brp = _pair(a["c3_breeder_wr"], a["c3_breeder_roi"], a["c3_breeder_m"], blend)
     s += (op + brp) * 0.5 * weights["C3"]  # owner/breeder に C3/2 ずつ
+    # スピード（一般戦のみ。weights["SP"] があれば走破直近 as-of pctl を 0-1 特徴として束ねる）。
+    # M1 診断で走破直近が最強だったため代表1次元として採用。データ無し(過去走ゼロ)は 0。
+    sp_col = a.get("sp_soha_recent_pctl")
+    if sp_col is not None and "SP" in weights:
+        s += np.where(np.isnan(sp_col), 0.0, sp_col) * weights["SP"]
     return s
 
 
