@@ -49,6 +49,7 @@ backend/logs/
 # バックテストの生成物（最適配点・検証結果＝スコアリング戦略を含む・非公開・再生成可能）
 # ソース(.py)は追跡し、結果JSON（重み/レポート/チェックポイント）は現行・将来分とも除外。
 backend/backtest/*_weights.json
+backend/backtest/*_weights_*.json
 backend/backtest/*_report.json
 backend/backtest/*_checkpoint.json
 
