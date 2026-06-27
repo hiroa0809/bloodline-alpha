@@ -138,11 +138,15 @@ def analyze(a, spec_groups, ana_start, ana_end, top_n, odds_ratio, auc_min) -> d
     )
     _log_table("M3b 主診断（末脚＋大まくり・full-IS）", full, top_n)
 
-    # 補助: 2000-2013（mae_3f データ制約）で緩ペース上がり。
+    # 補助: 2000-2013（mae_3f データ制約）で緩ペース上がり。市場②も同じ窓で再計算する
+    # （full窓の市場AUCを流用すると別期間参照になり比較・JSONが誤解を招くため）。
     sp_start = max(SP_WINDOW_START, ana_start)
     idx_sp = _build_idx(a, sp_start, ana_end)
+    market_auc_sp = auc_over_races(
+        a, mvals, mmask, idx_sp["pooled"], top_n, odds_ratio
+    )["auc"]
     sp = _diag_group(
-        a, spec_groups["sp"], idx_sp, market_auc, top_n, odds_ratio, auc_min
+        a, spec_groups["sp"], idx_sp, market_auc_sp, top_n, odds_ratio, auc_min
     )
     logger.info(
         f"--- 補助診断は mae_3f データ制約により {sp_start}-{ana_end} 限定（block1=0%のため）---"

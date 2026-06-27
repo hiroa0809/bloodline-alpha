@@ -49,12 +49,12 @@ GAIN_MIN = 3
 # ============================================================
 
 
-def _is_makuri(r: dict) -> bool:
+def _is_makuri(r: dict, back_cut: float = BACK_CUT) -> bool:
     """この過去走が大まくり（直線手前で後方→着順まで GAIN_MIN 以上前進）か。"""
     pos = _prestretch_pos(r["corners"])
     bf = _back_frac(pos, r["field_size"])
     chaku = r["chaku"]
-    if bf is None or bf < BACK_CUT or chaku < 1 or pos is None:
+    if bf is None or bf < back_cut or chaku < 1 or pos is None:
         return False
     return (pos - chaku) >= GAIN_MIN
 
@@ -110,7 +110,7 @@ def assign_close_features(runs: list[dict], back_cut: float = BACK_CUT) -> None:
         st["cl"] = cv
         st["cs"] += cv
         st["cc"] += 1
-        if _is_makuri(r):
+        if _is_makuri(r, back_cut):
             st["mb"] = cv if np.isnan(st["mb"]) else max(st["mb"], cv)
             st["ml"] = cv
             st["mc"] += 1
