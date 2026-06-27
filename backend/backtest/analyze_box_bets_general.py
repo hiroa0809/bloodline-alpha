@@ -225,6 +225,7 @@ def load_wakuban(
 # レース・picks 構築（スコア固定で上位順を並べる）
 # ============================================================
 def _ban(x) -> int:
+    """馬番を int 化。空/異常値は -1（払戻 kumiban と一致しない不正番）にする。"""
     try:
         return int(x)
     except (TypeError, ValueError):
@@ -328,6 +329,7 @@ def part2_odds_value(races: dict) -> dict:
         m: {
             "odds_sum": 0.0,
             "odds_n": 0,
+            "stake": 0,
             "pay": 0.0,
             "race_tot": [],
             "hit_odds": 0.0,
@@ -349,6 +351,7 @@ def part2_odds_value(races: dict) -> dict:
             d = agg[m]
             d["odds_sum"] += float(np.nansum(po))
             d["odds_n"] += int(pv.sum())
+            d["stake"] += TOP5  # 単勝5点: 欠損オッズも投資額に含める（P3 と分母を統一）
             d["race_tot"].append(float(np.nansum(po)))
             d["pay"] += float(np.nansum(po * wn[idx]))  # 単勝5点: 当たり馬のオッズ
             hm = in5[idx] & pv
@@ -362,7 +365,7 @@ def part2_odds_value(races: dict) -> dict:
             "per_race_odds_total": float(np.mean(d["race_tot"]))
             if d["race_tot"]
             else None,
-            "tansho5_roi": d["pay"] / d["odds_n"] if d["odds_n"] else None,
+            "tansho5_roi": d["pay"] / d["stake"] if d["stake"] else None,
             "hit_avg_odds": d["hit_odds"] / d["hit_n"] if d["hit_n"] else None,
         }
     return out
@@ -462,6 +465,7 @@ def _eval_cell(races, payoffs, wakuban, key, kind, N, floor) -> dict:
 
 
 def part4_box(races, payoffs, wakuban, floor: bool) -> dict:
+    """事前登録グリッド（券種×N）を全セル集計して {セルキー: 手法別ROI/的中/被覆} を返す。"""
     out = {}
     for key, _name, kind, Ns in GRID:
         for N in Ns:
@@ -481,29 +485,38 @@ def part4_box(races, payoffs, wakuban, floor: bool) -> dict:
 # 出力
 # ============================================================
 def _pct(v) -> str:
+    """0-1 の比率を百分率文字列に。None は空コホート扱いで "—" を返す。"""
     return f"{v * 100:5.1f}%" if v is not None else "  —  "
 
 
+def _num(v, spec: str) -> str:
+    """数値を spec 書式で整形。None（空コホート）は "—" を返し TypeError を防ぐ。"""
+    return f"{v:{spec}}" if v is not None else "  —  "
+
+
 def _log_p1_p2(p1: dict, p2: dict) -> None:
+    """P1 precision@5 と P2 オッズ妙味をログ出力する。"""
     logger.info(
         f"=== P1 precision@5（上位5頭の確定5着以内入賞率・races={p1['speed']['races']:,}） ==="
     )
     for m in METHODS:
         d = p1[m]
         logger.info(
-            f"  {m:<7}{_pct(d['precision5'])}  (1レース平均 {d['avg_in5']:.3f}/5頭)"
+            f"  {m:<7}{_pct(d['precision5'])}  (1レース平均 {_num(d['avg_in5'], '.3f')}/5頭)"
         )
     logger.info(f"  random {_pct(p1['random']['precision5'])}  (期待値ベースライン)")
     logger.info("=== P2 オッズ妙味（上位5頭） ===")
     for m in METHODS:
         d = p2[m]
         logger.info(
-            f"  {m:<7}平均オッズ={d['avg_odds']:6.2f}倍 1レース合計={d['per_race_odds_total']:7.2f}倍 "
-            f"単勝5点ROI={_pct(d['tansho5_roi'])} 入賞馬平均={d['hit_avg_odds']:6.2f}倍"
+            f"  {m:<7}平均オッズ={_num(d['avg_odds'], '6.2f')}倍 "
+            f"1レース合計={_num(d['per_race_odds_total'], '7.2f')}倍 "
+            f"単勝5点ROI={_pct(d['tansho5_roi'])} 入賞馬平均={_num(d['hit_avg_odds'], '6.2f')}倍"
         )
 
 
 def _log_tansho(p3_off: dict, p3_on: dict) -> None:
+    """P3 単勝N点買い ROI を下限あり/なし横並びでログ出力する。"""
     logger.info(
         "=== P3 単勝N点買い ROI（speed/full/market）  [下限なし | 下限あり(1人気≥N倍)] ==="
     )
@@ -517,6 +530,7 @@ def _log_tansho(p3_off: dict, p3_on: dict) -> None:
 
 
 def _log_box(p4_off: dict, p4_on: dict) -> None:
+    """P4 券種別ボックス ROI を券種別・下限あり/なし横並びでログ出力する。"""
     logger.info(
         "=== P4 券種別ボックス ROI（speed/full/market）  [下限なし | 下限あり(1人気≥N倍)] ==="
     )
@@ -533,6 +547,7 @@ def _log_box(p4_off: dict, p4_on: dict) -> None:
 
 
 def main() -> None:
+    """キャッシュ読込→スコア固定→P1〜P4を集計しログ＋JSONレポートを出力する。"""
     ap = argparse.ArgumentParser()
     ap.add_argument("--smoke", action="store_true", help="狭年範囲で実行可否のみ確認")
     args = ap.parse_args()
