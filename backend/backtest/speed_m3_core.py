@@ -166,9 +166,14 @@ def build_trip_arrays(a: dict, runs: list[dict], ana_end: int) -> list[tuple[str
     targets = [r for r in runs if not r["is_maiden"] and r["year"] <= ana_end]
     targets.sort(key=lambda r: (r["year"], r["race_id"], r["umaban"]))
     n = len(targets)
-    assert n == len(a["chaku"]), (
-        "M3 targets が M2 配列と整合しません（並び/フィルタ不一致）"
-    )
+    assert n == len(a["chaku"]), "M3 targets が M2 配列と整合しません（件数不一致）"
+    # 件数一致だけでは並びズレ（別馬へ trip 特徴が紐づく）を見逃すため、行キー
+    # (race_id, umaban) の完全一致を検証する（M2 build_arrays が露出したキー列と突合）。
+    m3_rid = np.array([r["race_id"] for r in targets], dtype=object)
+    m3_uma = np.array([r["umaban"] for r in targets], dtype=object)
+    assert np.array_equal(m3_rid, a["_row_race_id"]) and np.array_equal(
+        m3_uma, a["_row_umaban"]
+    ), "M3 targets が M2 配列と整合しません（行キー race_id/umaban 不一致）"
 
     def _arr(attr: str) -> np.ndarray:
         return np.array([float(r[attr]) for r in targets], dtype=np.float64)

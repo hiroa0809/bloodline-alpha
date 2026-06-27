@@ -153,10 +153,20 @@ def analyze(a, trip_specs, ana_start, ana_end, top_n, odds_ratio, auc_min) -> di
             "matched_auc": s["matched_auc"],
             "block_matched_aucs": s["block_matched_aucs"],
         }
-        logger.info(
+        msg = (
             f"サニティ M2 soha_recent: ③pooled={s['matched_auc']:.4f} / "
-            f"③blocks={[round(x, 3) for x in s['block_matched_aucs']]}（M2確定 [0.527,0.530,0.524]）"
+            f"③blocks={[round(x, 3) for x in s['block_matched_aucs']]}"
         )
+        # M2確定値 [0.527,0.530,0.524] は full-IS・既定設定の数値。--smoke や引数上書き時は
+        # 窓もブロックも違い一致しないため、その条件のときだけ照合基準を併記する。
+        if (
+            ana_start == IS_START
+            and ana_end == IS_END
+            and top_n == 3
+            and odds_ratio == 1.5
+        ):
+            msg += "（M2確定 [0.527, 0.530, 0.524] と照合）"
+        logger.info(msg)
 
     results = []
     for fname, label in trip_specs:

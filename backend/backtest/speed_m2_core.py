@@ -427,6 +427,9 @@ def build_arrays(runs: list[dict], ana_end: int) -> dict:
         [np.nan if r["odds"] is None else float(r["odds"]) for r in targets],
         dtype=np.float64,
     )
+    # 行キー（race_id/umaban）を露出＝M3 build_trip_arrays が並び一致を検証する保険用。
+    a["_row_race_id"] = np.array([r["race_id"] for r in targets], dtype=object)
+    a["_row_umaban"] = np.array([r["umaban"] for r in targets], dtype=object)
     for fname, fkey, _, _ in FEATURES:
         vals = np.array([float(r[fkey]) for r in targets], dtype=np.float64)
         a[fname] = vals
@@ -444,7 +447,7 @@ def build_arrays(runs: list[dict], ana_end: int) -> dict:
         a["race_year"] = np.array([], dtype=np.int64)
         a["race_is_off"] = np.array([], dtype=bool)
         return a
-    rid = np.array([r["race_id"] for r in targets], dtype=object)
+    rid = a["_row_race_id"]
     year = np.array([r["year"] for r in targets], dtype=np.int64)
     bucket = np.array([r["going_bucket"] or "" for r in targets], dtype=object)
     change = (year[1:] != year[:-1]) | (rid[1:] != rid[:-1])
