@@ -75,14 +75,55 @@ def going_bucket(
 # ============================================================
 
 
+def parse_mae3f(s: str | None) -> float | None:
+    """前半3F時間（0.1秒単位の3桁文字列 例 '351'=35.1秒）→ 秒。空/ゼロは None。"""
+    v = (s or "").strip()
+    if v in ("", "000", "0000", "0"):
+        return None
+    try:
+        sec = int(v) / 10.0
+    except (ValueError, TypeError):
+        return None
+    return sec if sec > 0 else None
+
+
+def _parse_field_size(s: str | None) -> int | None:
+    """出走頭数。空/0/非数は None。"""
+    v = (s or "").strip()
+    if not v:
+        return None
+    try:
+        n = int(v)
+    except (ValueError, TypeError):
+        return None
+    return n if n > 0 else None
+
+
+def _parse_corner(s: str | None) -> int | None:
+    """コーナー通過順位。'00'/空/0 は記録なし＝None。"""
+    v = (s or "").strip()
+    if v in ("", "00", "0"):
+        return None
+    try:
+        n = int(v)
+    except (ValueError, TypeError):
+        return None
+    return n if n > 0 else None
+
+
 def load_race_info(conn: sqlite3.Connection, scan_start: int, ana_end: int) -> dict:
-    """jvd_race → レースPK → 条件情報（surface/class_tier/going_bucket 含む）。"""
+    """jvd_race → レースPK → 条件情報（surface/class_tier/going_bucket 含む）。
+
+    M3 トリップ／ペース層のため mae3f（前半3F・レース単位ペース）と field_size（出走頭数）も
+    追加格納する（既存フィールドは不変＝M2 出力に影響しない）。
+    """
     info: dict[tuple, dict] = {}
     cur = conn.execute(
         "SELECT kaisai_nen, kaisai_tsukihi, keibajo_code, kaisai_kai, kaisai_nichime, "
         "  race_bango, track_code, kyori, grade_code, "
         "  kyoso_joken_code_2sai, kyoso_joken_code_3sai, kyoso_joken_code_4sai, "
-        "  kyoso_joken_code_5sai_ijo, shiba_baba_jotai_code, dirt_baba_jotai_code "
+        "  kyoso_joken_code_5sai_ijo, shiba_baba_jotai_code, dirt_baba_jotai_code, "
+        "  mae_3f, shusso_tosu "
         "FROM jvd_race WHERE CAST(kaisai_nen AS INTEGER) BETWEEN ? AND ?",
         (scan_start, ana_end),
     )
@@ -102,6 +143,8 @@ def load_race_info(conn: sqlite3.Connection, scan_start: int, ana_end: int) -> d
         j5,
         shiba,
         dirt,
+        mae3f,
+        shusso,
     ) in cur:
         try:
             year = int(nen)
@@ -118,17 +161,24 @@ def load_race_info(conn: sqlite3.Connection, scan_start: int, ana_end: int) -> d
             "is_maiden": "701" in codes[:2],
             "class_tier": race_class_tier(codes, grade),
             "going_bucket": going_bucket(surface, shiba, dirt),
+            "mae3f": parse_mae3f(mae3f),
+            "field_size": _parse_field_size(shusso),
         }
     return info
 
 
 def load_runs(conn: sqlite3.Connection, race_info: dict, scan_start: int, ana_end: int):
-    """jvd_race_uma を走査し平地戦の出走行を収集（year<=ana_end＝OOS封印）。"""
+    """jvd_race_uma を走査し平地戦の出走行を収集（year<=ana_end＝OOS封印）。
+
+    M3 トリップ層のため corner1-4 通過順位と、レース単位の mae3f/field_size（race_info 経由）も
+    各 run に追加格納する（既存キーは不変＝M2 出力に影響しない）。
+    """
     runs: list[dict] = []
     cur = conn.execute(
         "SELECT kaisai_nen, kaisai_tsukihi, keibajo_code, kaisai_kai, kaisai_nichime, "
         "  race_bango, umaban, ketto_toroku_bango, kakutei_chakujun, tansho_odds, "
-        "  ijo_kubun_code, soha_time, ato_3f_time FROM jvd_race_uma "
+        "  ijo_kubun_code, soha_time, ato_3f_time, "
+        "  corner1_juni, corner2_juni, corner3_juni, corner4_juni FROM jvd_race_uma "
         "WHERE CAST(kaisai_nen AS INTEGER) BETWEEN ? AND ?",
         (scan_start, ana_end),
     )
@@ -146,6 +196,10 @@ def load_runs(conn: sqlite3.Connection, race_info: dict, scan_start: int, ana_en
         ijo,
         soha,
         ato3f,
+        c1,
+        c2,
+        c3,
+        c4,
     ) in cur:
         info = race_info.get((nen, tsukihi, keibajo, kai, nichime, rbango))
         if info is None or info["surface"] is None:
@@ -180,6 +234,15 @@ def load_runs(conn: sqlite3.Connection, race_info: dict, scan_start: int, ana_en
                 "going_bucket": info["going_bucket"],
                 "soha": parse_soha(soha) if valid_finish else None,
                 "ato3f": parse_ato3f(ato3f) if valid_finish else None,
+                # --- M3 トリップ層用（生データ） ---
+                "corners": (
+                    _parse_corner(c1),
+                    _parse_corner(c2),
+                    _parse_corner(c3),
+                    _parse_corner(c4),
+                ),
+                "mae3f": info["mae3f"],
+                "field_size": info["field_size"],
             }
         )
     return runs
