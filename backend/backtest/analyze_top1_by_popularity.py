@@ -89,8 +89,9 @@ def _umaban_int(v) -> int:
 def collect_top1_records(a: dict, scores: np.ndarray, y0: int, y1: int) -> list[dict]:
     """各レースのシステムTop-1（スコア最大・同点は馬番昇順）の人気/オッズ/着を集める。
 
-    compute_score の argmax 規約（-score, umaban 昇順）に一致させる。Top-1の単勝オッズ欠落・
-    人気欠落(ninki<=0)のレースは「買えない」ため除外（被覆に反映）。
+    compute_score の argmax 規約（-score, umaban 昇順）に一致させる。Top-1の単勝オッズ欠落
+    レースのみ「買えない」ため除外。人気欠落(ninki<=0)はオッズが有効なら単勝は買えるので
+    baseline(全Top-1)には残し、人気バケット(1-6/7+)には自然に入らない（=層別からだけ外れる）。
     """
     starts = a["race_start"]
     ry = a["race_year"]
@@ -113,21 +114,26 @@ def collect_top1_records(a: dict, scores: np.ndarray, y0: int, y1: int) -> list[
         )
         top_odds = odds[top]
         top_ninki = int(ninki[top])
-        if np.isnan(top_odds) or top_odds <= 0 or top_ninki <= 0:
-            continue  # 買えない（オッズ/人気欠落）レースは除外
+        if np.isnan(top_odds) or top_odds <= 0:
+            continue  # オッズ欠落＝買えないレースのみ除外（人気欠落は baseline に残す）
         # 市場含意勝率（1/オッズのレース内正規化＝控除率除去）。Top-1馬の含意勝率。
+        # 他馬に欠損オッズがあると正規化が不完全になり implied が過大化するため、
+        # 全頭のオッズが揃ったレースだけ計算し、欠けるレースは None（集計から除外）。
         inv = 0.0
+        implied_ok = True
         for j in range(lo, hi):
             oj = odds[j]
-            if not np.isnan(oj) and oj > 0:
-                inv += 1.0 / oj
+            if np.isnan(oj) or oj <= 0:
+                implied_ok = False
+                break
+            inv += 1.0 / oj
         records.append(
             {
                 "ninki": top_ninki,
                 "odds": float(top_odds),
                 "won": 1 if won[top] == 1 else 0,
                 "placed": 1 if 1 <= int(chaku[top]) <= 3 else 0,
-                "implied": (1.0 / top_odds) / inv if inv else None,
+                "implied": (1.0 / top_odds) / inv if implied_ok and inv else None,
             }
         )
     return records
@@ -169,6 +175,7 @@ def by_popularity(records: list[dict]) -> dict[str, dict]:
 
 
 def _log_summary(label: str, m: dict) -> None:
+    """summarize 1行をログ整形出力する（N/勝率/複勝率/単勝ROI/含意勝率/平均オッズ）。"""
     logger.info(
         f"  {label:<10}N={m['n']:>6,}  勝率{m['hit'] * 100:>5.1f}%  "
         f"複勝{m['place'] * 100:>5.1f}%  単勝ROI{m['roi'] * 100:>6.1f}%  "
@@ -203,6 +210,7 @@ def run_for_dataset(a: dict, name: str, y0: int, y1: int) -> dict:
 
 
 def main() -> None:
+    """新馬戦・一般戦のシステムTop-1を人気別に層別診断し、レポートを保存する（OOS封印）。"""
     ap = argparse.ArgumentParser(
         description="システムTop-1を人気別に層別した単勝ROI診断（IS限定・OOS封印）"
     )
